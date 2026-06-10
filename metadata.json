@@ -1,0 +1,8 @@
+{
+  "name": "Jericho University College Portal",
+  "description": "A comprehensive mobile-responsive student portal for Jericho University tracking academic progress, financial aid, advising, predictive at-risk student detection, module usage analytics, proactive incident management, and a centralized support ticketing system for all campus departments.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
