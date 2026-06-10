@@ -1,5 +1,7 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
+import pg from "pg";
+import mssql from "mssql";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -179,6 +181,138 @@ async function startServer() {
         ["1", "Success", "SIS_Micro_Service", new Date().toISOString()]
       ],
       execTimeMs: 5
+    });
+  });
+
+  // Live Active Card SQL Executor Bridge
+  app.post("/api/sis/staging/execute-card-query", async (req, res) => {
+    const { connection, sqlQuery } = req.body;
+    if (!sqlQuery) {
+      return res.status(400).json({ success: false, error: "SQL query statement is required." });
+    }
+
+    if (!connection || connection.id === 'sis-production') {
+      const upperQuery = sqlQuery.toUpperCase();
+      let columns: string[] = [];
+      let rows: any[] = [];
+
+      if (upperQuery.includes("SUM(GPA") || upperQuery.includes("CURRENT_GPA") || upperQuery.includes("ROUND(SUM(GPA")) {
+        columns = ["current_gpa"];
+        rows = [{ current_gpa: 3.85 }];
+      } else if (upperQuery.includes("CREDITS") || upperQuery.includes("COMPLETED_CREDITS")) {
+        columns = ["completed_credits", "required_credits"];
+        rows = [{ completed_credits: 112, required_credits: 120 }];
+      } else if (upperQuery.includes("PROGRAM_NAME") || upperQuery.includes("MAJOR") || upperQuery.includes("STUDENT_PROGRAMS")) {
+        columns = ["major", "minor", "programName"];
+        rows = [{ major: "Computer Science", minor: "Calculus", programName: "School of Engineering" }];
+      } else if (upperQuery.includes("ACADEMIC_TERMS") || upperQuery.includes("TERM_ID") || upperQuery.includes("YEAR_TERM_TABLE") || upperQuery.includes("TERM_NAME") || upperQuery.includes("STUD_TERM_SUM_DIV")) {
+        columns = ["term_id", "term", "year"];
+        rows = [
+          { term_id: "FA24", term: "Fall Semester", year: 2024 },
+          { term_id: "SP24", term: "Spring Semester", year: 2024 },
+          { term_id: "FA23", term: "Fall Semester", year: 2023 }
+        ];
+      } else {
+        columns = ["status", "queries_run", "server_local_time"];
+        rows = [{ status: "Simulation Sandbox Active", queries_run: 1, server_local_time: new Date().toLocaleTimeString() }];
+      }
+
+      return res.json({
+        success: true,
+        simulated: true,
+        rows,
+        columns
+      });
+    }
+
+    const { dbType, dbHost, dbPort, dbName, dbUser, dbPass, dbSslMode } = connection;
+    
+    // Process parameter substitution to standard values
+    let processedQuery = sqlQuery;
+    processedQuery = processedQuery.replace(/@StudentId/gi, "'1028617'");
+    processedQuery = processedQuery.replace(/:student_id/gi, "'1028617'");
+
+    if (dbType === "sqlserver" || dbType === "mssql") {
+      try {
+        const config = {
+          user: dbUser,
+          password: dbPass,
+          server: dbHost,
+          port: parseInt(dbPort) || 1433,
+          database: dbName,
+          options: {
+            encrypt: dbSslMode === "require" || dbSslMode === "prefer",
+            trustServerCertificate: true // Crucial for self-signed or local development
+          },
+          connectionTimeout: 4000,
+          requestTimeout: 8000
+        };
+
+        const pool = await mssql.connect(config);
+        const result = await pool.request().query(processedQuery);
+        await pool.close();
+
+        return res.json({
+          success: true,
+          rows: result.recordset,
+          columns: result.recordset && result.recordset.length > 0 ? Object.keys(result.recordset[0]) : []
+        });
+      } catch (error: any) {
+        console.warn("MSSQL connection/query failed:", error.message);
+        return res.status(200).json({
+          success: false,
+          error: error.message || "Failed to query MSSQL Server backend",
+          code: error.code || "DB_ERROR"
+        });
+      }
+    } else if (dbType === "postgresql" || dbType === "postgres") {
+      try {
+        const poolConfig: pg.PoolConfig = {
+          user: dbUser,
+          host: dbHost,
+          database: dbName,
+          password: dbPass,
+          port: parseInt(dbPort) || 5432,
+          connectionTimeoutMillis: 4000
+        };
+
+        if (dbSslMode === "require" || dbSslMode === "prefer") {
+          poolConfig.ssl = { rejectUnauthorized: false };
+        }
+
+        const client = new pg.Client(poolConfig);
+        await client.connect();
+        const result = await client.query({ text: processedQuery, rowMode: 'array' as any });
+        await client.end();
+
+        // Map column details
+        const cols = result.fields.map(f => f.name);
+        const rows = result.rows.map(row => {
+          const obj: any = {};
+          cols.forEach((colName, index) => {
+            obj[colName] = (row as any)[index];
+          });
+          return obj;
+        });
+
+        return res.json({
+          success: true,
+          rows,
+          columns: cols
+        });
+      } catch (error: any) {
+        console.warn("PostgreSQL connection/query failed:", error.message);
+        return res.status(200).json({
+          success: false,
+          error: error.message || "Failed to query PostgreSQL backend",
+          code: error.code || "DB_ERROR"
+        });
+      }
+    }
+
+    return res.status(400).json({
+      success: false,
+      error: `Database platform '${dbType}' is not currently configured for executing card telemetry.`
     });
   });
 

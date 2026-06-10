@@ -126,12 +126,23 @@ const ConnectivityTest: React.FC = () => {
   const [mapperSqlQuery, setMapperSqlQuery] = useState<string>('');
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
 
+  // SQL Testing sandbox states
+  const [queryTestLoading, setQueryTestLoading] = useState(false);
+  const [queryTestResult, setQueryTestResult] = useState<{
+    success: boolean;
+    rows?: any[];
+    columns?: string[];
+    error?: string;
+    simulated?: boolean;
+  } | null>(null);
+
   // Sync state values when selected card changes
   useEffect(() => {
     const activeBinding = bindings.find(b => b.cardId === selectedCardId);
     if (activeBinding) {
       setMapperSqlQuery(activeBinding.sqlQuery);
       setMapperConnectionId(activeBinding.connectionId);
+      setQueryTestResult(null);
     }
   }, [selectedCardId, bindings]);
 
@@ -763,6 +774,137 @@ const ConnectivityTest: React.FC = () => {
                   placeholder="SELECT * FROM my_table WHERE student_id = @StudentId..."
                   className="w-full text-xs font-mono bg-slate-900 text-emerald-400 rounded-xl p-3 outline-none focus:ring-1 focus:ring-purple-600 border border-slate-800 leading-relaxed font-semibold text-left"
                 />
+              </div>
+
+              {/* 🔍 Dynamic SQL Query execution sandbox */}
+              <div className="p-4 bg-slate-50 border border-gray-150 rounded-2xl space-y-3 mt-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block">
+                      SQL Output Sandbox Validator
+                    </span>
+                    <p className="text-[9px] text-gray-400">
+                      Test query output dynamically on the connected database.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={queryTestLoading}
+                    onClick={() => {
+                      setQueryTestLoading(true);
+                      setQueryTestResult(null);
+                      const conn = mapperConnectionId === 'sis-production' 
+                        ? null 
+                        : connections.find(c => c.id === mapperConnectionId);
+
+                      fetch('/api/sis/staging/execute-card-query', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          connection: conn,
+                          sqlQuery: mapperSqlQuery
+                        })
+                      })
+                      .then(r => r.json())
+                      .then(res => {
+                        setQueryTestResult(res);
+                        setQueryTestLoading(false);
+                      })
+                      .catch(err => {
+                        setQueryTestResult({
+                          success: false,
+                          error: err.message || "Failed executing connectivity handshake for query"
+                        });
+                        setQueryTestLoading(false);
+                      });
+                    }}
+                    className="p-1.5 px-4 bg-purple-100 hover:bg-purple-200 text-purple-750 font-black text-xs uppercase tracking-wider rounded-xl transition-all border border-purple-200 inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {queryTestLoading ? (
+                      <>
+                        <RefreshCw size={12} className="animate-spin" />
+                        <span>Running...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Terminal size={12} />
+                        <span>Test Query</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {queryTestResult && (
+                  <div className="space-y-2 text-left animate-in fade-in duration-200 border-t border-gray-200/60 pt-3">
+                    {queryTestResult.success ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="p-1 px-2 bg-emerald-50 border border-emerald-100 text-emerald-700 text-[9px] font-black uppercase rounded">
+                            ✅ Handshake Success
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-bold font-mono">
+                            Fetched {queryTestResult.rows?.length || 0} rows {queryTestResult.simulated && "(Simulated)"}
+                          </span>
+                        </div>
+
+                        {queryTestResult.rows && queryTestResult.rows.length > 0 ? (
+                          <div className="overflow-x-auto border border-gray-150 rounded-xl bg-white max-h-[140px] overflow-y-auto">
+                            <table className="w-full text-[10px] font-mono text-left border-collapse">
+                              <thead>
+                                <tr className="bg-slate-100 border-b border-gray-150 text-[9px] font-black text-slate-500 uppercase tracking-wider">
+                                  {queryTestResult.columns?.map(col => (
+                                    <th key={col} className="p-1.5 px-2.5">{col}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {queryTestResult.rows.map((row, rIdx) => (
+                                  <tr key={rIdx} className="hover:bg-slate-50/50">
+                                    {queryTestResult.columns?.map(col => (
+                                      <td key={col} className="p-1.5 px-2.5 text-gray-700">
+                                        {row[col] !== null && row[col] !== undefined ? String(row[col]) : <span className="text-gray-350 italic">NULL</span>}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <div className="p-3 bg-white border border-gray-150 rounded-xl text-center text-gray-400 font-mono text-[10.5px] italic">
+                            Empty rowset returned. Check table filters or join criteria.
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="p-1 px-2 bg-rose-50 border border-rose-100 text-rose-700 text-[9px] font-black uppercase rounded">
+                            ❌ Connection Failed
+                          </span>
+                        </div>
+                        <div className="p-3 bg-red-50/60 text-rose-700 font-mono text-[10.5px] rounded-xl border border-rose-150 whitespace-pre-wrap leading-relaxed break-all">
+                          {queryTestResult.error}
+                        </div>
+                        
+                        {(queryTestResult.error?.toLowerCase().includes("enotfound") || 
+                          queryTestResult.error?.toLowerCase().includes("timeout") || 
+                          queryTestResult.error?.toLowerCase().includes("etimedout") || 
+                          queryTestResult.error?.toLowerCase().includes("connect") || 
+                          queryTestResult.error?.toLowerCase().includes("esocket") ||
+                          queryTestResult.error?.toLowerCase().includes("failed to query")) && (
+                          <div className="p-3 bg-amber-50 rounded-xl border border-amber-100 text-[10px] text-amber-950 font-sans leading-relaxed space-y-1">
+                            <p className="font-bold text-amber-950">💡 Network Reachability Indicator:</p>
+                            <p>
+                              The database hostname <strong>"{connections.find(c => c.id === mapperConnectionId)?.dbHost || "jzbcs-sq11"}"</strong> is a private intranet resource. 
+                              Since this app runs securely on Google Cloud, it cannot directly reach your office network's local IPs/subdomains without port forwarding, dynamic DNS setup, or VPN bridges.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 

@@ -86,6 +86,145 @@ const Academics: React.FC = () => {
     return found ? `${found.name} (${found.dbType.toUpperCase()})` : 'Jericho SIS Production (Default Postgres Bridge)';
   };
 
+  // Database live execution results state
+  const [dbData, setDbData] = useState<Record<string, {
+    loading: boolean;
+    success?: boolean;
+    error?: string;
+    data?: any;
+    simulated?: boolean;
+    connectionUsed?: string;
+  }>>({
+    gpa: { loading: false },
+    credits: { loading: false },
+    program: { loading: false },
+    terms: { loading: false }
+  });
+
+  useEffect(() => {
+    // We execute queries for each of our bindings!
+    bindings.forEach(binding => {
+      // Find connection object
+      const conn = binding.connectionId === 'sis-production' 
+        ? null 
+        : connections.find(c => c.id === binding.connectionId);
+        
+      setDbData(prev => ({
+        ...prev,
+        [binding.cardId]: {
+          loading: true,
+          connectionUsed: conn ? conn.name : 'Jericho SIS Production (Default Postgres Bridge)'
+        }
+      }));
+
+      fetch('/api/sis/staging/execute-card-query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          connection: conn,
+          sqlQuery: binding.sqlQuery
+        })
+      })
+      .then(r => r.json())
+      .then(res => {
+        if (res.success) {
+          setDbData(prev => ({
+            ...prev,
+            [binding.cardId]: {
+              loading: false,
+              success: true,
+              simulated: res.simulated,
+              data: res.rows
+            }
+          }));
+        } else {
+          setDbData(prev => ({
+            ...prev,
+            [binding.cardId]: {
+              loading: false,
+              success: false,
+              error: res.error || "Failed executing query",
+              data: null
+            }
+          }));
+        }
+      })
+      .catch(err => {
+        setDbData(prev => ({
+          ...prev,
+          [binding.cardId]: {
+            loading: false,
+            success: false,
+            error: err.message || "Network connection failure",
+            data: null
+          }
+        }));
+      });
+    });
+  }, [bindings, connections]);
+
+  const getGpaDisplayValue = () => {
+    const cardData = dbData.gpa;
+    if (cardData && cardData.success && cardData.data && cardData.data.length > 0) {
+      const row = cardData.data[0];
+      const key = Object.keys(row).find(k => k.toLowerCase().includes('gpa') || k.toLowerCase().includes('score') || k.toLowerCase().includes('career'));
+      if (key && row[key] !== undefined && row[key] !== null) {
+        const val = Number(row[key]);
+        return isNaN(val) ? '--' : val.toFixed(2);
+      }
+    }
+    return '--';
+  };
+
+  const getCreditsDisplayValue = () => {
+    const cardData = dbData.credits;
+    if (cardData && cardData.success && cardData.data && cardData.data.length > 0) {
+      const row = cardData.data[0];
+      const key = Object.keys(row).find(k => k.toLowerCase().includes('credit') || k.toLowerCase().includes('hour'));
+      if (key && row[key] !== undefined && row[key] !== null) {
+        const val = Number(row[key]);
+        return isNaN(val) ? '--' : Math.round(val);
+      }
+    }
+    return '--';
+  };
+
+  const getProgramDisplayValue = () => {
+    const cardData = dbData.program;
+    if (cardData && cardData.success && cardData.data && cardData.data.length > 0) {
+      const row = cardData.data[0];
+      const majorKey = Object.keys(row).find(k => k.toLowerCase() === 'major' || k.toLowerCase().includes('name') || k.toLowerCase().includes('program'));
+      const minorKey = Object.keys(row).find(k => k.toLowerCase() === 'minor');
+      const deptKey = Object.keys(row).find(k => k.toLowerCase().includes('dept') || k.toLowerCase().includes('name') || k.toLowerCase().includes('programname'));
+      return {
+        major: majorKey ? row[majorKey] : '--',
+        minor: minorKey ? row[minorKey] : '--',
+        programName: deptKey ? row[deptKey] : '--'
+      };
+    }
+    return {
+      major: '--',
+      minor: '--',
+      programName: '--'
+    };
+  };
+
+  const getTermsOptions = () => {
+    const cardData = dbData.terms;
+    if (cardData && cardData.success && cardData.data && cardData.data.length > 0) {
+      return cardData.data.map((row: any, i: number) => {
+        const idKey = Object.keys(row).find(k => k.toLowerCase().includes('id') || k.toLowerCase().includes('cde')) || 'term_id';
+        const nameKey = Object.keys(row).find(k => k.toLowerCase() === 'term' || k.toLowerCase().includes('desc') || k.toLowerCase().includes('name')) || 'term';
+        const yearKey = Object.keys(row).find(k => k.toLowerCase().includes('year') || k.toLowerCase().includes('yr')) || 'term_year';
+        return {
+          id: String(row[idKey] || `db-term-${i}`),
+          label: row[nameKey] ? String(row[nameKey]) : `${row[yearKey] || 'Term'}`
+        };
+      });
+    }
+    return [];
+  };
+
   const filteredSemesters = selectedTermId === 'all' 
     ? SEMESTERS_MOCK 
     : SEMESTERS_MOCK.filter(sem => sem.id === selectedTermId);
@@ -153,14 +292,19 @@ const Academics: React.FC = () => {
                 className="appearance-none w-full bg-white border border-gray-200 rounded-xl px-4 py-2 pr-8 font-bold text-gray-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-505 cursor-pointer text-sm"
               >
                 <option value="all">All Terms</option>
-                {SEMESTERS_MOCK.map(sem => (
-                  <option key={sem.id} value={sem.id}>{sem.term} {sem.year}</option>
+                {getTermsOptions().map(term => (
+                  <option key={term.id} value={term.id}>{term.label}</option>
                 ))}
               </select>
               <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
                 <ChevronDown size={16} />
               </div>
             </div>
+            {dbData.terms.error && (
+              <span className="text-[7.5px] font-semibold text-rose-600 bg-rose-50 px-1 border border-rose-100 rounded block mt-1 leading-tight truncate" title={dbData.terms.error}>
+                ⚠️ Connection failed: {dbData.terms.error}
+              </span>
+            )}
             {devModeActive && (
               <span 
                 className="text-[8px] font-semibold text-purple-700 font-mono block text-left mt-1 whitespace-nowrap truncate cursor-help"
@@ -196,12 +340,20 @@ const Academics: React.FC = () => {
           )}
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total GPA</p>
           <div className="flex items-center justify-center space-x-2 my-2">
-            <span className="text-3xl font-black text-indigo-600">{STUDENT_MOCK.currentGpa}</span>
+            <span className="text-3xl font-black text-indigo-600">
+              {dbData.gpa.loading ? (
+                <span className="text-xs font-normal text-gray-400">Loading...</span>
+              ) : getGpaDisplayValue()}
+            </span>
             <span className="text-green-500 flex items-center text-xs font-bold">
               <ArrowUpRight size={14} /> +0.05
             </span>
           </div>
-          {devModeActive ? (
+          {dbData.gpa.error ? (
+            <div className="bg-rose-50 text-[8px] font-semibold text-rose-700 p-1 px-1.5 rounded-lg border border-rose-100 leading-tighter truncate text-left w-full" title={dbData.gpa.error}>
+              ⚠️ DB Error / Timed out
+            </div>
+          ) : devModeActive ? (
             <span className="text-[8.5px] font-bold text-purple-700 font-mono block whitespace-nowrap truncate" title={getConnectionLabel(bindings.find(b => b.cardId === 'gpa')?.connectionId)}>
               🔗 {getConnectionLabel(bindings.find(b => b.cardId === 'gpa')?.connectionId)}
             </span>
@@ -224,8 +376,17 @@ const Academics: React.FC = () => {
             </button>
           )}
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Completed Credits</p>
-          <p className="text-3xl font-black text-gray-900 mt-1">{STUDENT_MOCK.totalCredits} <span className="text-sm font-normal text-gray-400">/ 120</span></p>
-          {devModeActive ? (
+          <p className="text-3xl font-black text-gray-900 mt-1">
+            {dbData.credits.loading ? (
+              <span className="text-xs font-normal text-gray-400">Loading...</span>
+            ) : getCreditsDisplayValue()} 
+            <span className="text-sm font-normal text-gray-400">/ 120</span>
+          </p>
+          {dbData.credits.error ? (
+            <div className="bg-rose-50 text-[8px] font-semibold text-rose-700 p-1 px-1.5 rounded-lg border border-rose-100 leading-tighter truncate text-left w-full" title={dbData.credits.error}>
+              ⚠️ DB Error / Timed out
+            </div>
+          ) : devModeActive ? (
             <span className="text-[8.5px] font-bold text-purple-700 font-mono block whitespace-nowrap truncate" title={getConnectionLabel(bindings.find(b => b.cardId === 'credits')?.connectionId)}>
               🔗 {getConnectionLabel(bindings.find(b => b.cardId === 'credits')?.connectionId)}
             </span>
@@ -251,16 +412,26 @@ const Academics: React.FC = () => {
              <GraduationCap size={12} />
              Program Details
           </p>
-          <div className="my-1 text-center">
-            <h3 className="text-xs font-black text-indigo-600 leading-tight truncate">{STUDENT_MOCK.major}</h3>
-            <p className="text-[9.5px] font-bold text-gray-500 mt-0.5">Minor: {STUDENT_MOCK.minor || 'None'}</p>
+          <div className="my-1 text-center font-bold">
+            {dbData.program.loading ? (
+              <span className="text-xs font-normal text-gray-400 block my-1">Loading...</span>
+            ) : (
+              <>
+                <h3 className="text-xs font-black text-indigo-600 leading-tight truncate" title={getProgramDisplayValue().major}>{getProgramDisplayValue().major}</h3>
+                <p className="text-[9.5px] font-bold text-gray-500 mt-0.5">Minor: {getProgramDisplayValue().minor || 'None'}</p>
+              </>
+            )}
           </div>
-          {devModeActive ? (
+          {dbData.program.error ? (
+            <div className="bg-rose-50 text-[8px] font-semibold text-rose-700 p-1 px-1.5 rounded-lg border border-rose-100 leading-tighter truncate text-left w-full" title={dbData.program.error}>
+              ⚠️ DB Error / Timed out
+            </div>
+          ) : devModeActive ? (
             <span className="text-[8.5px] font-bold text-purple-700 font-mono block whitespace-nowrap truncate" title={getConnectionLabel(bindings.find(b => b.cardId === 'program')?.connectionId)}>
               🔗 {getConnectionLabel(bindings.find(b => b.cardId === 'program')?.connectionId)}
             </span>
           ) : (
-            <span className="text-[9.5px] text-gray-400 font-mono truncate">{STUDENT_MOCK.programName}</span>
+            <span className="text-[9.5px] text-gray-400 font-mono truncate block text-center w-full" title={getProgramDisplayValue().programName}>{getProgramDisplayValue().programName}</span>
           )}
         </div>
       </div>
@@ -401,13 +572,90 @@ const Academics: React.FC = () => {
                 <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider font-mono block mb-1">
                   Active SQL Credentials Query Statement
                 </span>
-                <div className="bg-slate-950 text-emerald-400 p-4 rounded-xl border border-slate-850 font-mono text-xs overflow-x-auto select-all shadow-inner leading-relaxed max-h-[160px] overflow-y-auto">
-                  <pre className="font-mono">{inspectingBinding.sqlQuery}</pre>
+                <div className="bg-slate-950 text-emerald-400 p-4 rounded-xl border border-slate-850 font-mono text-xs overflow-x-auto select-all shadow-inner leading-relaxed max-h-[160px] overflow-y-auto w-full">
+                  <pre className="font-mono whitespace-pre-wrap break-all">{inspectingBinding.sqlQuery}</pre>
                 </div>
               </div>
 
+              {/* 📊 Live Execution Results Status */}
+              {(() => {
+                const cardStatus = dbData[inspectingBinding.cardId];
+                if (!cardStatus) return null;
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4.5 space-y-2 text-xs text-left">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider font-mono">Live Execution Status</span>
+                      {cardStatus.loading ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-yellow-100 text-yellow-850 font-extrabold text-[9px] uppercase tracking-wide">
+                          🔄 Querying...
+                        </span>
+                      ) : cardStatus.success ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-850 font-extrabold text-[9px] uppercase tracking-wide">
+                          ✅ Connected
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-100 text-rose-850 font-extrabold text-[9px] uppercase tracking-wide">
+                          ❌ Failed
+                        </span>
+                      )}
+                    </div>
+
+                    {cardStatus.loading && (
+                      <p className="text-slate-500 font-medium animate-pulse">Connecting to relational database and executing your custom SQL statement...</p>
+                    )}
+
+                    {cardStatus.success && (
+                      <div className="space-y-1.5 text-left">
+                        <p className="text-slate-700 font-semibold">
+                          Fetched {cardStatus.data?.length || 0} rows {cardStatus.simulated && " (Simulated sandbox fallback)"}.
+                        </p>
+                        {cardStatus.data && cardStatus.data.length > 0 ? (
+                          <div className="bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-[10px] font-mono text-emerald-400 max-h-[120px] overflow-y-auto">
+                            <pre className="whitespace-pre-wrap leading-tight">{JSON.stringify(cardStatus.data[0], null, 2)}</pre>
+                            {cardStatus.data.length > 1 && (
+                              <span className="text-slate-500 italic block mt-1.5">...and {cardStatus.data.length - 1} more rows</span>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-slate-500 italic p-2 bg-slate-100 rounded">
+                            Empty rowsets returned. Check if the query criteria matches student ID 1028617.
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {cardStatus.error && (
+                      <div className="space-y-2 text-left">
+                        <div className="p-3 bg-red-50 text-rose-700 font-semibold rounded-lg border border-rose-100 font-mono text-[10.5px] leading-relaxed break-all whitespace-pre-wrap shadow-inner">
+                          {cardStatus.error}
+                        </div>
+                        {(cardStatus.error.toLowerCase().includes("enotfound") || 
+                          cardStatus.error.toLowerCase().includes("timeout") || 
+                          cardStatus.error.toLowerCase().includes("etimedout") || 
+                          cardStatus.error.toLowerCase().includes("connect") || 
+                          cardStatus.error.toLowerCase().includes("esocket") ||
+                          cardStatus.error.toLowerCase().includes("failed to query")) && (
+                          <div className="p-3 bg-amber-50 text-amber-900 rounded-xl border border-amber-100 text-[11px] leading-relaxed font-sans shadow-xs space-y-1">
+                            <p className="font-bold text-amber-950 flex items-center gap-1">
+                              💡 Intranet Host Accessibility Detected:
+                            </p>
+                            <p>
+                              The database hostname <strong>"{connections.find(c => c.id === inspectingBinding.connectionId)?.dbHost || "jzbcs-sq11"}"</strong> is a local LAN intranet address. 
+                              Because the application is deployed on public cloud instances (Google Cloud Run), it is unable to resolve or reach private hostnames on your office/local network.
+                            </p>
+                            <p className="text-amber-800 italic mt-1 bg-white/60 p-1.5 rounded border border-amber-100">
+                              To resolve this, configure your MSSQL server to have a reachable public IP or subdomain with Port 1433 opened/forwarded in your firewall, or use a public playground database connection link.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Variable bindings helpful advice card */}
-              <div className="p-3.5 bg-indigo-50/50 border border-indigo-100 rounded-xl flex items-start gap-2.5 text-[11px] text-indigo-950">
+              <div className="p-3.5 bg-indigo-50/50 border border-indigo-100 rounded-xl flex items-start gap-2.5 text-[11px] text-indigo-950 text-left">
                 <Info size={14} className="text-indigo-600 shrink-0 mt-0.5" />
                 <p className="leading-snug text-slate-650">
                   This SQL statement is mapped to target your localized MSSQL server instance schemas. 
