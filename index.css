@@ -1,0 +1,104 @@
+
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Markdown Table Styles */
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+}
+
+.markdown-body th, .markdown-body td {
+  border: 1px solid #e2e8f0;
+  padding: 0.5rem;
+  text-align: left;
+}
+
+.markdown-body th {
+  background-color: #f8fafc;
+  font-weight: 700;
+}
+
+.markdown-body tr:nth-child(even) {
+  background-color: #f1f5f9;
+}
+
+.markdown-body ul, .markdown-body ol {
+  margin-left: 1.5rem;
+  margin-bottom: 1rem;
+  list-style-type: disc;
+}
+
+.markdown-body p {
+  margin-bottom: 0.75rem;
+}
+
+.markdown-body strong {
+  font-weight: 700;
+}
+
+/* Sleek custom scrollbars that only appear on hover and disappear on leave */
+
+/* Dark navigation scrollbar (for indigo background sidebar) */
+.sleek-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.3s ease;
+}
+.sleek-scrollbar:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+.sleek-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+  background-color: transparent;
+}
+.sleek-scrollbar::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+.sleek-scrollbar::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+  transition: background-color 0.3s ease;
+}
+.sleek-scrollbar:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.25);
+}
+.sleek-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.45);
+}
+
+/* Light sidebar/menu scrollbar */
+.sleek-scrollbar-light {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.3s ease;
+}
+.sleek-scrollbar-light:hover {
+  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+}
+.sleek-scrollbar-light::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+  background-color: transparent;
+}
+.sleek-scrollbar-light::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+.sleek-scrollbar-light::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+  transition: background-color 0.3s ease;
+}
+.sleek-scrollbar-light:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.15);
+}
+.sleek-scrollbar-light::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.25);
+}
+
