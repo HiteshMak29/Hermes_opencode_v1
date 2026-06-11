@@ -716,7 +716,7 @@ const ConnectivityTest: React.FC = () => {
       { label: `Metadata retrieval validation on schema "${conn.dbName}"`, status: 'idle' }
     ]);
 
-    // Step 1 Finish
+    // Steps 1-3: simulated network handshake (UI animation)
     setTimeout(() => {
       setDbTestSteps(prev => [
         { ...prev[0], status: 'success' },
@@ -724,9 +724,8 @@ const ConnectivityTest: React.FC = () => {
         ...prev.slice(2)
       ]);
       setDbTestFeedback(`Route verified. Server is reachable. Establishing socket connection...`);
-    }, 900);
+    }, 600);
 
-    // Step 2 Finish
     setTimeout(() => {
       setDbTestSteps(prev => [
         prev[0],
@@ -735,9 +734,8 @@ const ConnectivityTest: React.FC = () => {
         ...prev.slice(3)
       ]);
       setDbTestFeedback(`TCP sockets bound. Testing secure cryptographic session wrappers...`);
-    }, 1800);
+    }, 1200);
 
-    // Step 3 Finish
     setTimeout(() => {
       setDbTestSteps(prev => [
         prev[0],
@@ -746,13 +744,64 @@ const ConnectivityTest: React.FC = () => {
         { ...prev[3], status: 'running' },
         ...prev.slice(4)
       ]);
-      setDbTestFeedback(`SSL Session authenticated. Sending credentials for role "${conn.dbUser || 'default'}"...`);
-    }, 2700);
+      setDbTestFeedback(`SSL Session authenticated. Contacting database server for credential handshake...`);
+    }, 1800);
 
-    // Step 4 Finish
-    setTimeout(() => {
-      const isFailed = conn.dbHost.includes('192.168.4.22') || conn.dbHost.toLowerCase().includes('fail');
-      if (isFailed) {
+    // Step 4-5: real connection test via server
+    setTimeout(async () => {
+      try {
+        const res = await fetch('/api/test-connection', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            dbType: conn.dbType,
+            dbHost: conn.dbHost,
+            dbPort: conn.dbPort,
+            dbName: conn.dbName,
+            dbUser: conn.dbUser,
+            dbPass: conn.dbPass,
+            dbSslMode: conn.dbSslMode,
+          }),
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          setDbTestSteps(prev => [
+            prev[0],
+            prev[1],
+            prev[2],
+            { ...prev[3], status: 'success' },
+            { ...prev[4], status: 'success' }
+          ]);
+          setDbTestFeedback(`Handshake fully verified. Bridge telemetry stream is active and operational.`);
+          setDbTestActive(false);
+
+          setConnections(prev => prev.map(c => c.id === connId ? {
+            ...c,
+            status: 'online',
+            latency: data.latency,
+            errorMessage: undefined,
+            lastTested: new Date().toLocaleTimeString()
+          } : c));
+        } else {
+          setDbTestSteps(prev => [
+            prev[0],
+            prev[1],
+            prev[2],
+            { ...prev[3], status: 'failed' },
+            { ...prev[4], status: 'idle' }
+          ]);
+          setDbTestFeedback(`Connection Failed. ${data.error || 'Remote peer refused handshake connection.'}`);
+          setDbTestActive(false);
+
+          setConnections(prev => prev.map(c => c.id === connId ? {
+            ...c,
+            status: 'offline',
+            errorMessage: data.error || 'Access denied: bad password or host timeout',
+            lastTested: new Date().toLocaleTimeString()
+          } : c));
+        }
+      } catch (err: any) {
         setDbTestSteps(prev => [
           prev[0],
           prev[1],
@@ -760,51 +809,17 @@ const ConnectivityTest: React.FC = () => {
           { ...prev[3], status: 'failed' },
           { ...prev[4], status: 'idle' }
         ]);
-        setDbTestFeedback('Connection Failed. Remote credentials challenge rejected or remote peer refused handshake connection.');
+        setDbTestFeedback('Connection Failed. Server unreachable or request timed out.');
         setDbTestActive(false);
 
         setConnections(prev => prev.map(c => c.id === connId ? {
           ...c,
           status: 'offline',
-          errorMessage: 'Access denied: bad password or host timeout',
+          errorMessage: err.message || 'Server unreachable',
           lastTested: new Date().toLocaleTimeString()
         } : c));
-      } else {
-        setDbTestSteps(prev => [
-          prev[0],
-          prev[1],
-          prev[2],
-          { ...prev[3], status: 'success' },
-          { ...prev[4], status: 'running' }
-        ]);
-        setDbTestFeedback('Access authorized. Reading metadata, indexes and active schema tables...');
       }
-    }, 3600);
-
-    // Step 5 Finish
-    setTimeout(() => {
-      const isFailed = conn.dbHost.includes('192.168.4.22') || conn.dbHost.toLowerCase().includes('fail');
-      if (isFailed) return;
-
-      setDbTestSteps(prev => [
-        prev[0],
-        prev[1],
-        prev[2],
-        prev[3],
-        { ...prev[4], status: 'success' }
-      ]);
-      setDbTestFeedback('Handshake fully verified. Bridge telemetry stream is active and operational.');
-      setDbTestActive(false);
-
-      const generatedLatency = Math.floor(Math.random() * 35) + 12; // 12-47ms
-      setConnections(prev => prev.map(c => c.id === connId ? {
-        ...c,
-        status: 'online',
-        latency: generatedLatency,
-        errorMessage: undefined,
-        lastTested: new Date().toLocaleTimeString()
-      } : c));
-    }, 4500);
+    }, 2400);
   };
 
   return (

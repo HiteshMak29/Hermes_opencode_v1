@@ -363,6 +363,64 @@ async function startServer() {
     });
   });
 
+  // Real database connection test endpoint
+  app.post("/api/test-connection", async (req, res) => {
+    const { dbType, dbHost, dbPort, dbName, dbUser, dbPass, dbSslMode } = req.body;
+
+    if (!dbType || !dbHost) {
+      return res.status(400).json({ success: false, error: "Missing required connection parameters" });
+    }
+
+    const startTime = Date.now();
+
+    if (dbType === "sqlserver" || dbType === "mssql") {
+      try {
+        const config = {
+          user: dbUser,
+          password: dbPass,
+          server: dbHost,
+          port: parseInt(dbPort) || 1433,
+          database: dbName || 'master',
+          options: {
+            encrypt: dbSslMode === "require" || dbSslMode === "prefer",
+            trustServerCertificate: true
+          },
+          connectionTimeout: 5000,
+          requestTimeout: 5000
+        };
+        const pool = await mssql.connect(config);
+        await pool.request().query('SELECT 1');
+        await pool.close();
+        return res.json({ success: true, latency: Date.now() - startTime });
+      } catch (error: any) {
+        return res.json({ success: false, error: error.message, latency: Date.now() - startTime });
+      }
+    } else if (dbType === "postgresql" || dbType === "postgres") {
+      try {
+        const poolConfig: pg.PoolConfig = {
+          user: dbUser,
+          host: dbHost,
+          database: dbName || 'postgres',
+          password: dbPass,
+          port: parseInt(dbPort) || 5432,
+          connectionTimeoutMillis: 5000
+        };
+        if (dbSslMode === "require" || dbSslMode === "prefer") {
+          poolConfig.ssl = { rejectUnauthorized: false };
+        }
+        const client = new pg.Client(poolConfig);
+        await client.connect();
+        await client.query('SELECT 1');
+        await client.end();
+        return res.json({ success: true, latency: Date.now() - startTime });
+      } catch (error: any) {
+        return res.json({ success: false, error: error.message, latency: Date.now() - startTime });
+      }
+    } else {
+      return res.status(400).json({ success: false, error: `Unsupported database type: '${dbType}'` });
+    }
+  });
+
   // --- VITE MIDDLEWARE ---
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
