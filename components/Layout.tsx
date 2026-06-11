@@ -55,7 +55,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     // { name: 'Dashboard', icon: LayoutDashboard, path: '/' },
     // { name: 'Admissions', icon: BookOpen, path: '/admissions' },
     { name: 'Academics', icon: GraduationCap, path: '/academics' },
-    // { name: 'Financial Aid', icon: Wallet, path: '/finances' },
+    { name: 'Financial Aid', icon: Wallet, path: '/finances' },
     // { name: 'Degree Progress', icon: Map, path: '/degree-tracker' },
     // { name: 'Advising', icon: Users, path: '/advising' },
     // { name: 'Housing', icon: Home, path: '/housing' },

@@ -16,7 +16,8 @@ import {
   X,
   Sliders
 } from 'lucide-react';
-import { SEMESTERS_MOCK, STUDENT_MOCK } from '../constants';
+import { STUDENT_MOCK } from '../constants';
+import type { Semester } from '../types';
 import ContactSection from '../components/ContactSection';
 
 interface QueryResult {
@@ -24,16 +25,19 @@ interface QueryResult {
   rows: string[][];
 }
 
-const executeSQL = async (sql: string): Promise<QueryResult> => {
-  const res = await fetch('/api/sis/staging/execute-sql', {
+const executeCardQuery = async (binding: any, connections: any[]): Promise<QueryResult | null> => {
+  const connection = connections.find((c: any) => c.id === binding.connectionId);
+  const res = await fetch('/api/sis/staging/execute-card-query', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: sql }),
+    body: JSON.stringify({ connection: connection || null, sqlQuery: binding.sqlQuery }),
   });
   if (!res.ok) throw new Error(`Server returned ${res.status}`);
   const data = await res.json();
-  if (!data.columns || !data.rows) throw new Error('Invalid response shape');
-  return data as QueryResult;
+  if (!data.success || !data.columns || !data.rows) throw new Error('Invalid response shape');
+  const columns: string[] = data.columns;
+  const rows: string[][] = data.rows.map((row: any) => columns.map((col: string) => String(row[col] ?? '')));
+  return { columns, rows };
 };
 
 const getRowValue = (result: QueryResult, colName: string, rowIndex = 0): string | undefined => {
@@ -44,7 +48,6 @@ const getRowValue = (result: QueryResult, colName: string, rowIndex = 0): string
 
 const Academics: React.FC = () => {
   const [selectedTermId, setSelectedTermId] = useState<string>('all');
-  const [expandedTerm, setExpandedTerm] = useState<string | null>(SEMESTERS_MOCK[0]?.id || null);
 
   const [dynamicGpa, setDynamicGpa] = useState<string | null>(null);
   const [dynamicCredits, setDynamicCredits] = useState<string | null>(null);
@@ -52,6 +55,7 @@ const Academics: React.FC = () => {
   const [dynamicMinor, setDynamicMinor] = useState<string | null>(null);
   const [dynamicProgram, setDynamicProgram] = useState<string | null>(null);
   const [dynamicTerms, setDynamicTerms] = useState<{ id: string; term: string; year: number }[]>([]);
+  const [dynamicSemesters, setDynamicSemesters] = useState<Semester[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Dynamic Query Mappings bindings state
@@ -84,6 +88,12 @@ const Academics: React.FC = () => {
         cardName: 'Academic Term List Filter',
         connectionId: 'sis-production',
         sqlQuery: "SELECT DISTINCT term_id, term_name AS term, term_year AS year\nFROM academic_terms\nWHERE start_date <= GETDATE()\nORDER BY term_year DESC, term_name DESC"
+      },
+      {
+        cardId: 'courses',
+        cardName: 'Course Details Accordion',
+        connectionId: 'sis-production',
+        sqlQuery: "SELECT sc.term_id, at.term_name AS term_name, at.term_year AS year, sc.course_code AS code, sc.course_name AS name, sc.division, sc.attendance, sc.credits, sc.mid_term_grade, sc.final_grade, sc.grade_points AS points\nFROM student_courses sc\nJOIN academic_terms at ON sc.term_id = at.term_id\nWHERE sc.student_id = @StudentId\nORDER BY at.term_year DESC, at.term_name DESC, sc.course_code"
       }
     ];
   });
@@ -94,7 +104,7 @@ const Academics: React.FC = () => {
       const binding = bindings.find(b => b.cardId === cardId);
       if (!binding) return null;
       try {
-        return await executeSQL(binding.sqlQuery);
+        return await executeCardQuery(binding, connections);
       } catch (e) {
         console.warn(`Failed to fetch binding "${cardId}":`, e);
         return null;
@@ -104,11 +114,12 @@ const Academics: React.FC = () => {
     const fetchData = async () => {
       setLoading(true);
 
-      const [gpaResult, creditsResult, programResult, termsResult] = await Promise.all([
+      const [gpaResult, creditsResult, programResult, termsResult, coursesResult] = await Promise.all([
         fetchBinding('gpa'),
         fetchBinding('credits'),
         fetchBinding('program'),
         fetchBinding('terms'),
+        fetchBinding('courses'),
       ]);
 
       if (gpaResult) {
@@ -137,6 +148,39 @@ const Academics: React.FC = () => {
           year: parseInt(getRowValue(termsResult, 'year', i) || getRowValue(termsResult, 'term_year', i) || '2024'),
         }));
         setDynamicTerms(terms);
+      }
+
+      if (coursesResult && coursesResult.rows.length > 0) {
+        const groups: Record<string, { id: string; term: string; year: number; courses: any[] }> = {};
+        for (let i = 0; i < coursesResult.rows.length; i++) {
+          const termId = getRowValue(coursesResult, 'term_id', i) || 'unknown';
+          if (!groups[termId]) {
+            groups[termId] = {
+              id: termId,
+              term: getRowValue(coursesResult, 'term_name', i) || '',
+              year: parseInt(getRowValue(coursesResult, 'year', i) || '0'),
+              courses: [],
+            };
+          }
+          groups[termId].courses.push({
+            id: getRowValue(coursesResult, 'code', i) || `c-${i}`,
+            code: getRowValue(coursesResult, 'code', i) || '',
+            name: getRowValue(coursesResult, 'name', i) || '',
+            division: (getRowValue(coursesResult, 'division', i) || 'UG') as 'UG' | 'GR',
+            credits: parseInt(getRowValue(coursesResult, 'credits', i) || '0'),
+            midTermGrade: getRowValue(coursesResult, 'mid_term_grade', i) || '—',
+            finalGrade: getRowValue(coursesResult, 'final_grade', i) || '—',
+            points: parseInt(getRowValue(coursesResult, 'points', i) || '0') || undefined,
+            attendance: parseInt(getRowValue(coursesResult, 'attendance', i) || '0') || undefined,
+            status: 'Completed' as const,
+          });
+        }
+        const semesters: Semester[] = Object.values(groups).map(g => ({
+          ...g,
+          gpa: g.courses.reduce((sum: number, c: any) => sum + (c.points || 0) * c.credits, 0) /
+               (g.courses.reduce((sum: number, c: any) => sum + (c.credits || 0), 0) || 1),
+        }));
+        setDynamicSemesters(semesters);
       }
 
       setLoading(false);
@@ -173,10 +217,11 @@ const Academics: React.FC = () => {
     return found ? `${found.name} (${found.dbType.toUpperCase()})` : 'Jericho SIS Production (Default Postgres Bridge)';
   };
 
-  const displayTerms = dynamicTerms.length > 0 ? dynamicTerms : SEMESTERS_MOCK;
+  const displayTerms = dynamicTerms.length > 0 ? dynamicTerms : [];
+  const displaySemesters = dynamicSemesters.length > 0 ? dynamicSemesters : [];
   const filteredSemesters = selectedTermId === 'all' 
-    ? SEMESTERS_MOCK 
-    : SEMESTERS_MOCK.filter(sem => sem.id === selectedTermId);
+    ? displaySemesters 
+    : displaySemesters.filter(sem => sem.id === selectedTermId);
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 pb-12 text-left">
@@ -353,91 +398,85 @@ const Academics: React.FC = () => {
         </div>
       </div>
 
-      {/* Semester Accordion / List */}
-      <div className="space-y-4">
-        {filteredSemesters.map((sem) => (
-          <div key={sem.id} className="bg-white rounded-3xl shadow-sm border border-gray-150/70 overflow-hidden">
-            <button 
-              onClick={() => setExpandedTerm(expandedTerm === sem.id ? null : sem.id)}
-              className="w-full flex items-center justify-between p-6 hover:bg-gray-50 transition-colors"
-            >
-              <div className="flex items-center space-x-4 text-left">
-                <div className="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600 shrink-0">
-                  <Award size={24} />
-                </div>
-                <div>
-                  <h3 className="font-bold text-gray-900">{sem.term} {sem.year}</h3>
-                  <p className="text-xs text-gray-500 font-medium">Term GPA: <span className="text-indigo-600">{sem.gpa}</span> • {sem.courses.length} Courses</p>
-                </div>
+      {/* Selected Term Course Details Card */}
+      {displaySemesters.length > 0 && (
+        <div className="bg-white rounded-3xl shadow-md border border-gray-150/80 p-6 animate-in fade-in duration-300">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600">
+                <BookOpen size={20} />
               </div>
-              {expandedTerm === sem.id ? <ChevronUp size={20} className="text-gray-400" /> : <ChevronDown size={20} className="text-gray-400" />}
-            </button>
-            
-            {expandedTerm === sem.id && (
-              <div className="px-6 pb-6 animate-in slide-in-from-top-2 duration-300">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left min-w-[600px]">
-                    <thead>
-                      <tr className="text-xs font-bold text-gray-400 uppercase border-b border-gray-100">
-                        <th className="py-3 px-1">Code</th>
-                        <th className="py-3 px-2">Course Name</th>
-                        <th className="py-3 px-2 text-center">Division</th>
-                        <th className="py-3 px-2 text-center">Attendance</th>
-                        <th className="py-3 px-2 text-center">Credits</th>
-                        <th className="py-3 px-2 text-right">Grade</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {sem.courses.map((course) => (
-                        <tr key={course.id} className="text-sm">
-                          <td className="py-4 px-1 font-bold text-indigo-600">{course.code}</td>
-                          <td className="py-4 px-2 font-medium text-gray-800">{course.name}</td>
-                          <td className="py-4 px-2 text-center">
-                            <span className="inline-block px-2 py-0.5 bg-gray-100 text-gray-600 text-[10px] font-black rounded-md uppercase">
-                              {course.division}
-                            </span>
-                          </td>
-                          <td className="py-4 px-2">
-                            <div className="flex flex-col items-center justify-center space-y-1">
-                                <span className={`text-[10px] font-bold ${
-                                    (course.attendance || 0) >= 90 ? 'text-green-600' : 
-                                    (course.attendance || 0) >= 75 ? 'text-blue-600' : 
-                                    'text-orange-600'
-                                }`}>
-                                    {course.attendance}%
-                                </span>
-                                <div className="w-16 bg-gray-100 h-1 rounded-full overflow-hidden">
-                                    <div 
-                                        className={`h-full rounded-full ${
-                                            (course.attendance || 0) >= 90 ? 'bg-green-500' : 
-                                            (course.attendance || 0) >= 75 ? 'bg-blue-500' : 
-                                            'bg-orange-500'
-                                        }`} 
-                                        style={{ width: `${course.attendance || 0}%` }}
-                                    ></div>
-                                </div>
-                            </div>
-                          </td>
-                          <td className="py-4 px-2 text-center text-gray-500">{course.credits}</td>
-                          <td className="py-4 px-2 text-right">
-                            <span className={`inline-block w-8 h-8 leading-8 text-center rounded-lg font-bold ${
-                              course.grade?.startsWith('A') ? 'bg-green-100 text-green-700' :
-                              course.grade?.startsWith('B') ? 'bg-blue-100 text-blue-700' :
-                              'bg-orange-100 text-orange-700'
-                            }`}>
-                              {course.grade}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                  {selectedTermId !== 'all' ? 'Selected Term' : 'Latest Term'}
+                </p>
+                <h3 className="text-xl font-black text-gray-900">
+                  {(selectedTermId !== 'all' ? filteredSemesters : displaySemesters)[0]?.term + ' ' + (selectedTermId !== 'all' ? filteredSemesters : displaySemesters)[0]?.year}
+                </h3>
               </div>
+            </div>
+            {devModeActive && (
+              <button
+                onClick={() => setInspectingBinding(bindings.find(b => b.cardId === 'courses'))}
+                className="p-1.5 px-3 bg-purple-600 hover:bg-purple-700 text-white rounded-full text-[8px] font-black uppercase tracking-wider shadow-sm flex items-center gap-1 cursor-pointer"
+              >
+                <Terminal size={10} />
+                <span>SQL INSPECT</span>
+              </button>
             )}
           </div>
-        ))}
-      </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left min-w-[700px]">
+              <thead>
+                <tr className="text-xs font-bold text-gray-400 uppercase border-b border-gray-100">
+                  <th className="py-3 px-1">Course Code</th>
+                  <th className="py-3 px-2">Course Name</th>
+                  <th className="py-3 px-2 text-center">Division</th>
+                  <th className="py-3 px-2 text-center">Major</th>
+                  <th className="py-3 px-2 text-center">Minor</th>
+                  <th className="py-3 px-2 text-center">Mid Term Grade</th>
+                  <th className="py-3 px-2 text-right">Final Grade</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {(selectedTermId !== 'all' ? filteredSemesters : displaySemesters)[0]?.courses.map((course) => (
+                  <tr key={course.id} className="text-sm">
+                    <td className="py-4 px-1 font-bold text-indigo-600">{course.code}</td>
+                    <td className="py-4 px-2 font-medium text-gray-800">{course.name}</td>
+                    <td className="py-4 px-2 text-center">
+                      <span className="inline-block px-2 py-0.5 bg-gray-100 text-gray-600 text-[10px] font-black rounded-md uppercase">
+                        {course.division}
+                      </span>
+                    </td>
+                    <td className="py-4 px-2 text-center text-gray-600 font-medium">{dynamicMajor || '—'}</td>
+                    <td className="py-4 px-2 text-center text-gray-600 font-medium">{dynamicMinor || '—'}</td>
+                    <td className="py-4 px-2 text-center">
+                      <span className={`inline-block w-10 h-10 leading-10 text-center rounded-lg font-bold text-xs ${
+                        course.midTermGrade?.startsWith('A') ? 'bg-green-100 text-green-700' :
+                        course.midTermGrade?.startsWith('B') ? 'bg-blue-100 text-blue-700' :
+                        course.midTermGrade?.startsWith('C') ? 'bg-yellow-100 text-yellow-700' :
+                        'bg-orange-100 text-orange-700'
+                      }`}>
+                        {course.midTermGrade || '—'}
+                      </span>
+                    </td>
+                    <td className="py-4 px-2 text-right">
+                      <span className={`inline-block w-10 h-10 leading-10 text-center rounded-lg font-bold text-xs ${
+                        course.finalGrade?.startsWith('A') ? 'bg-green-100 text-green-700' :
+                        course.finalGrade?.startsWith('B') ? 'bg-blue-100 text-blue-700' :
+                        course.finalGrade?.startsWith('C') ? 'bg-yellow-100 text-yellow-700' :
+                        'bg-orange-100 text-orange-700'
+                      }`}>
+                        {course.finalGrade || '—'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* 🔮 Developer SQL Inspector Overlay Modal */}
       {inspectingBinding && (

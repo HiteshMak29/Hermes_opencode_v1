@@ -8,6 +8,8 @@ export interface Course {
   credits: number;
   grade?: string;
   points?: number;
+  midTermGrade?: string;
+  finalGrade?: string;
   status: 'In Progress' | 'Completed' | 'Registered';
   attendance?: number; // Percentage
   division: 'UG' | 'GR';

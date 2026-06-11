@@ -50,6 +50,7 @@ export interface CardQueryBinding {
 }
 
 const DEFAULT_SQL_BINDINGS: CardQueryBinding[] = [
+  // ── Academics ──────────────────────────────────────────
   {
     cardId: 'gpa',
     cardName: 'GPA Summary Metric Card',
@@ -77,6 +78,450 @@ const DEFAULT_SQL_BINDINGS: CardQueryBinding[] = [
     section: 'Academics',
     connectionId: 'sis-production',
     sqlQuery: `SELECT DISTINCT term_id, term_name AS term, term_year AS year\nFROM academic_terms\nWHERE start_date <= GETDATE()\nORDER BY term_year DESC, term_name DESC`
+  },
+  {
+    cardId: 'courses',
+    cardName: 'Course Details Accordion',
+    section: 'Academics',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT sc.term_id, at.term_name AS term_name, at.term_year AS year, sc.course_code AS code, sc.course_name AS name, sc.division, sc.attendance, sc.credits, sc.mid_term_grade, sc.final_grade, sc.grade_points AS points\nFROM student_courses sc\nJOIN academic_terms at ON sc.term_id = at.term_id\nWHERE sc.student_id = @StudentId\nORDER BY at.term_year DESC, at.term_name DESC, sc.course_code`
+  },
+  // ── Dashboard ──────────────────────────────────────────
+  {
+    cardId: 'dash-gpa',
+    cardName: 'Cumulative GPA',
+    section: 'Dashboard',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT ROUND(SUM(gpa * credits) / NULLIF(SUM(credits), 0), 2) AS current_gpa\nFROM student_enrolment\nWHERE student_id = @StudentId AND grade_status = 'FINAL'`
+  },
+  {
+    cardId: 'dash-credits',
+    cardName: 'Credits Earned',
+    section: 'Dashboard',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT SUM(CASE WHEN grade NOT IN ('F', 'W', 'I') THEN credits ELSE 0 END) AS total_credits\nFROM student_courses\nWHERE student_id = @StudentId`
+  },
+  {
+    cardId: 'dash-admissions',
+    cardName: 'Admissions Status',
+    section: 'Dashboard',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT status AS admissions_status, application_term AS term, application_year AS year\nFROM admissions\nWHERE student_id = @StudentId`
+  },
+  {
+    cardId: 'dash-aid',
+    cardName: 'Total Financial Aid',
+    section: 'Dashboard',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT SUM(amount) AS total_aid\nFROM financial_aid\nWHERE student_id = @StudentId AND status = 'AWARDED'`
+  },
+  {
+    cardId: 'dash-tuition',
+    cardName: 'Outstanding Tuition & Fees',
+    section: 'Dashboard',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT SUM(amount) AS outstanding_balance, MIN(due_date) AS next_due_date\nFROM student_fees\nWHERE student_id = @StudentId AND paid = 0`
+  },
+  {
+    cardId: 'dash-schedule',
+    cardName: 'Upcoming Schedule',
+    section: 'Dashboard',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT title, start_time, end_time, location\nFROM student_appointments\nWHERE student_id = @StudentId AND start_time >= GETDATE()\nORDER BY start_time ASC`
+  },
+  {
+    cardId: 'dash-courses',
+    cardName: 'In-Progress Courses',
+    section: 'Dashboard',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT sc.course_code AS code, sc.course_name AS name, sc.credits, sc.attendance\nFROM student_courses sc\nWHERE sc.student_id = @StudentId AND sc.status = 'IN_PROGRESS'`
+  },
+  // ── Advising ──────────────────────────────────────────
+  {
+    cardId: 'adv-advisor',
+    cardName: 'Advisor Profile',
+    section: 'Advising',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT a.name, a.department, a.email, a.office, a.office_hours\nFROM advisors a\nJOIN student_advisors sa ON a.advisor_id = sa.advisor_id\nWHERE sa.student_id = @StudentId AND sa.status = 'ACTIVE'`
+  },
+  {
+    cardId: 'adv-appointments',
+    cardName: 'Advising Appointments',
+    section: 'Advising',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT title, description, start_time, end_time, status\nFROM advising_appointments\nWHERE student_id = @StudentId\nORDER BY start_time DESC`
+  },
+  {
+    cardId: 'adv-notes',
+    cardName: 'Advising Notes',
+    section: 'Advising',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT note_text, created_at, author_name\nFROM advising_notes\nWHERE student_id = @StudentId\nORDER BY created_at DESC`
+  },
+  // ── Finances ──────────────────────────────────────────
+  {
+    cardId: 'fin-balance',
+    cardName: 'Total Outstanding Balance',
+    section: 'Finances',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT SUM(amount) AS total_balance\nFROM student_fees\nWHERE student_id = @StudentId AND paid = 0`
+  },
+  {
+    cardId: 'fin-fees',
+    cardName: 'Fee Breakdown',
+    section: 'Finances',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT fee_type, description, amount, due_date, paid\nFROM student_fees\nWHERE student_id = @StudentId\nORDER BY due_date ASC`
+  },
+  {
+    cardId: 'fin-aid',
+    cardName: 'Financial Aid Awarded',
+    section: 'Finances',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT aid_type, amount, status, award_date\nFROM financial_aid\nWHERE student_id = @StudentId\nORDER BY award_date DESC`
+  },
+  {
+    cardId: 'fin-cost-dist',
+    cardName: 'Cost Distribution Pie Chart',
+    section: 'Finances',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT fee_type AS name, SUM(amount) AS value\nFROM student_fees\nWHERE student_id = @StudentId\nGROUP BY fee_type`
+  },
+  // ── Housing ──────────────────────────────────────────
+  {
+    cardId: 'hou-assignment',
+    cardName: 'Room Assignment',
+    section: 'Housing',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT building_name, room_name, move_in_date, move_out_date, partner_name\nFROM housing_assignments\nWHERE student_id = @StudentId AND status = 'ACTIVE'`
+  },
+  {
+    cardId: 'hou-penalties',
+    cardName: 'Pending Room Charges & Penalties',
+    section: 'Housing',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT description, amount, date_incurred, status\nFROM housing_penalties\nWHERE student_id = @StudentId AND status = 'PENDING'`
+  },
+  {
+    cardId: 'hou-financial',
+    cardName: 'Housing Financial Summary',
+    section: 'Housing',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT semester_charges, utility_status\nFROM housing_financials\nWHERE student_id = @StudentId`
+  },
+  // ── Medical ──────────────────────────────────────────
+  {
+    cardId: 'med-status',
+    cardName: 'Compliance Status',
+    section: 'Medical',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT status AS compliance_status\nFROM medical_records\nWHERE student_id = @StudentId`
+  },
+  {
+    cardId: 'med-requirements',
+    cardName: 'Clearance Items',
+    section: 'Medical',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT requirement_name, description, due_date, status\nFROM medical_requirements\nWHERE student_id = @StudentId\nORDER BY due_date ASC`
+  },
+  // ── Meals ──────────────────────────────────────────
+  {
+    cardId: 'meal-balance',
+    cardName: 'Wallet Balance Hero',
+    section: 'Meals',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT current_balance, opening_balance, plan_name, plan_type, wallet_id\nFROM meal_plans\nWHERE student_id = @StudentId AND status = 'ACTIVE'`
+  },
+  {
+    cardId: 'meal-transactions',
+    cardName: 'Recent Transactions',
+    section: 'Meals',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT location, transaction_time, amount\nFROM meal_transactions\nWHERE student_id = @StudentId\nORDER BY transaction_time DESC\nLIMIT 10`
+  },
+  // ── Library ──────────────────────────────────────────
+  {
+    cardId: 'lib-issued',
+    cardName: 'Books Currently Issued',
+    section: 'Library',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT COUNT(*) AS issued_count\nFROM library_books\nWHERE student_id = @StudentId AND status = 'ISSUED'`
+  },
+  {
+    cardId: 'lib-penalties',
+    cardName: 'Library Penalties',
+    section: 'Library',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT SUM(amount) AS total_penalties\nFROM library_penalties\nWHERE student_id = @StudentId AND paid = 0`
+  },
+  {
+    cardId: 'lib-records',
+    cardName: 'Borrowing Records',
+    section: 'Library',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT book_title, issue_date, due_date, return_date, status\nFROM library_books\nWHERE student_id = @StudentId\nORDER BY issue_date DESC`
+  },
+  {
+    cardId: 'lib-ebooks',
+    cardName: 'Digital Library E-Books',
+    section: 'Library',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT title, author, category, description, reader_url\nFROM ebooks\nWHERE student_id = @StudentId OR is_public = 1`
+  },
+  // ── Wellness ──────────────────────────────────────────
+  {
+    cardId: 'well-checkin',
+    cardName: 'Anonymous Wellness Check-In',
+    section: 'Wellness',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT mood_level, notes, created_at\nFROM wellness_checkins\nWHERE student_id = @StudentId\nORDER BY created_at DESC\nLIMIT 5`
+  },
+  {
+    cardId: 'well-counselling',
+    cardName: 'Self-Schedule Counselling',
+    section: 'Wellness',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT counselor_name, slot_time, slot_type, availability\nFROM counselling_slots\nWHERE availability = 1\nORDER BY slot_time ASC`
+  },
+  {
+    cardId: 'well-crisis',
+    cardName: 'Campus Emergency Contacts',
+    section: 'Wellness',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT label, phone_number\nFROM emergency_contacts\nWHERE is_active = 1`
+  },
+  // ── Student Retention ────────────────────────────────
+  {
+    cardId: 'ret-confidence',
+    cardName: 'Dropout Risk Confidence',
+    section: 'Student Retention',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT risk_score, risk_level, confidence\nFROM retention_scores\nWHERE student_id = @StudentId`
+  },
+  {
+    cardId: 'ret-trend',
+    cardName: 'Risk Probability Trend',
+    section: 'Student Retention',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT month, score\nFROM retention_trends\nWHERE student_id = @StudentId\nORDER BY month ASC`
+  },
+  {
+    cardId: 'ret-factors',
+    cardName: 'Contributing Risk Factors',
+    section: 'Student Retention',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT factor_name, impact, description\nFROM retention_factors\nWHERE student_id = @StudentId`
+  },
+  // ── Access Card ──────────────────────────────────────
+  {
+    cardId: 'acc-card',
+    cardName: 'Digital Access Card',
+    section: 'Access Card',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT name, student_id, profile_image, status\nFROM student_profiles\nWHERE student_id = @StudentId`
+  },
+  {
+    cardId: 'acc-zones',
+    cardName: 'Authorization Zones',
+    section: 'Access Card',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT zone_name, access_level\nFROM access_zones\nWHERE student_id = @StudentId`
+  },
+  {
+    cardId: 'acc-audit',
+    cardName: 'Campus Entry Audit Trail',
+    section: 'Access Card',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT location, timestamp, status, reason, sensor_name\nFROM access_logs\nWHERE student_id = @StudentId\nORDER BY timestamp DESC\nLIMIT 20`
+  },
+  // ── Career & Internship ──────────────────────────────
+  {
+    cardId: 'career-jobs',
+    cardName: 'Smart Job Board Listings',
+    section: 'Career & Internship',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT job_title, company, salary_range, match_score, description\nFROM job_listings\nWHERE match_score > 70\nORDER BY match_score DESC`
+  },
+  {
+    cardId: 'career-resume',
+    cardName: 'AI Resume Feedback',
+    section: 'Career & Internship',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT resume_text, overall_score, ats_compatibility, major_relevance\nFROM resume_submissions\nWHERE student_id = @StudentId\nORDER BY submitted_at DESC\nLIMIT 1`
+  },
+  {
+    cardId: 'career-alumni',
+    cardName: 'Alumni Career Paths',
+    section: 'Career & Internship',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT alumni_name, graduation_year, current_role, company, certifications\nFROM alumni_paths\nWHERE mentoring_available = 1`
+  },
+  // ── Degree Progress ──────────────────────────────────
+  {
+    cardId: 'deg-progress',
+    cardName: 'Total Degree Progress Map',
+    section: 'Degree Progress',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT completed_credits, in_progress_credits, credits_needed, completion_pct\nFROM degree_progress\nWHERE student_id = @StudentId`
+  },
+  {
+    cardId: 'deg-whatif',
+    cardName: 'What-If Major Planner',
+    section: 'Degree Progress',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT major_name, total_credits_required, description, courses_needed\nFROM whatif_majors\nWHERE student_id = @StudentId`
+  },
+  {
+    cardId: 'deg-prereq',
+    cardName: 'Prerequisite Conflict Flag',
+    section: 'Degree Progress',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT course_code, missing_prereqs\nFROM prerequisite_conflicts\nWHERE student_id = @StudentId`
+  },
+  {
+    cardId: 'deg-curriculum',
+    cardName: 'Curriculum Pathways & Course Sequence',
+    section: 'Degree Progress',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT course_code, course_name, grade, term, status\nFROM curriculum_sequence\nWHERE student_id = @StudentId\nORDER BY term ASC`
+  },
+  // ── Module Analytics ──────────────────────────────────
+  {
+    cardId: 'mod-views',
+    cardName: 'Total Module Views',
+    section: 'Module Analytics',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT module_name, view_count, bounce_rate\nFROM module_usage\nORDER BY view_count DESC`
+  },
+  {
+    cardId: 'mod-active',
+    cardName: 'Active Users (24h)',
+    section: 'Module Analytics',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT COUNT(DISTINCT user_id) AS active_users\nFROM module_sessions\nWHERE session_start >= DATEADD(HOUR, -24, GETDATE())`
+  },
+  {
+    cardId: 'mod-session',
+    cardName: 'Avg Session Duration',
+    section: 'Module Analytics',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT AVG(duration_minutes) AS avg_duration\nFROM module_sessions\nWHERE session_start >= DATEADD(DAY, -7, GETDATE())`
+  },
+  {
+    cardId: 'mod-satisfaction',
+    cardName: 'In-Portal Module Satisfaction & NPS',
+    section: 'Module Analytics',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT module_name, nps_score, satisfaction_pct\nFROM module_nps\nORDER BY nps_score DESC`
+  },
+  // ── System Status ─────────────────────────────────────
+  {
+    cardId: 'sys-health',
+    cardName: 'Operational Health Badge',
+    section: 'System Status',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT uptime_pct, status_message\nFROM system_health\nWHERE is_current = 1`
+  },
+  {
+    cardId: 'sys-services',
+    cardName: 'Current Service Status Matrices',
+    section: 'System Status',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT service_name, status, uptime, last_incident\nFROM service_status\nORDER BY service_name ASC`
+  },
+  {
+    cardId: 'sys-incidents',
+    cardName: 'Active Incident History Log',
+    section: 'System Status',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT tier, title, status, description, start_time, end_time, team\nFROM incidents\nWHERE status IN ('OPEN', 'IN_PROGRESS')\nORDER BY start_time DESC`
+  },
+  // ── Incident Management ──────────────────────────────
+  {
+    cardId: 'inc-mttr',
+    cardName: 'Mean Time to Resolve',
+    section: 'Incident Management',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT AVG(DATEDIFF(MINUTE, start_time, end_time)) AS mttr_minutes\nFROM incidents\nWHERE status = 'RESOLVED' AND end_time >= DATEADD(DAY, -30, GETDATE())`
+  },
+  {
+    cardId: 'inc-dispatch',
+    cardName: 'Automatic Dispatch Success',
+    section: 'Incident Management',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT COUNT(CASE WHEN dispatch_success = 1 THEN 1 END) * 100.0 / COUNT(*) AS success_pct\nFROM dispatch_logs\nWHERE created_at >= DATEADD(DAY, -30, GETDATE())`
+  },
+  {
+    cardId: 'inc-listings',
+    cardName: 'Incident Listings',
+    section: 'Incident Management',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT tier, title, status, description, start_time, end_time, team\nFROM incidents\nORDER BY start_time DESC`
+  },
+  // ── Support Ticketing ─────────────────────────────────
+  {
+    cardId: 'sup-tickets',
+    cardName: 'Active Support Tickets',
+    section: 'Support Ticketing',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT ticket_id, subject, status, priority, created_at\nFROM support_tickets\nWHERE student_id = @StudentId AND status != 'CLOSED'\nORDER BY created_at DESC`
+  },
+  // ── Contact Information ──────────────────────────────
+  {
+    cardId: 'contact-advising',
+    cardName: 'Advising Contact Info',
+    section: 'Contact',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT email, phone, dept_name\nFROM department_contacts\nWHERE dept_code = 'ADVISING'`
+  },
+  {
+    cardId: 'contact-finance',
+    cardName: 'Finance Contact Info',
+    section: 'Contact',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT email, phone, dept_name\nFROM department_contacts\nWHERE dept_code = 'FINANCE'`
+  },
+  {
+    cardId: 'contact-housing',
+    cardName: 'Housing Contact Info',
+    section: 'Contact',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT email, phone, dept_name\nFROM department_contacts\nWHERE dept_code = 'HOUSING'`
+  },
+  {
+    cardId: 'contact-medical',
+    cardName: 'Medical Contact Info',
+    section: 'Contact',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT email, phone, dept_name\nFROM department_contacts\nWHERE dept_code = 'MEDICAL'`
+  },
+  {
+    cardId: 'contact-library',
+    cardName: 'Library Contact Info',
+    section: 'Contact',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT email, phone, dept_name\nFROM department_contacts\nWHERE dept_code = 'LIBRARY'`
+  },
+  {
+    cardId: 'contact-meals',
+    cardName: 'Meals Contact Info',
+    section: 'Contact',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT email, phone, dept_name\nFROM department_contacts\nWHERE dept_code = 'MEALS'`
+  },
+  {
+    cardId: 'contact-security',
+    cardName: 'Security Contact Info',
+    section: 'Contact',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT email, phone, dept_name\nFROM department_contacts\nWHERE dept_code = 'SECURITY'`
+  },
+  {
+    cardId: 'contact-registrar',
+    cardName: "Registrar's Office Contact Info",
+    section: 'Contact',
+    connectionId: 'sis-production',
+    sqlQuery: `SELECT email, phone, dept_name\nFROM department_contacts\nWHERE dept_code = 'REGISTRAR'`
   }
 ];
 
@@ -90,11 +535,7 @@ const ConnectivityTest: React.FC = () => {
       try {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed)) {
-          return parsed.filter((c: any) => 
-            c.id !== 'sis-production' && 
-            c.id !== 'admissions-replica' && 
-            c.id !== 'canvas-migration'
-          );
+          return parsed;
         }
       } catch (e) {
         // Fallback
@@ -115,16 +556,15 @@ const ConnectivityTest: React.FC = () => {
     return DEFAULT_SQL_BINDINGS;
   });
 
-  // Whenever bindings change, persist to local storage
-  useEffect(() => {
-    localStorage.setItem('juc_card_sql_queries', JSON.stringify(bindings));
-  }, [bindings]);
-
   // Selected Card for the interactive Mapper UI
   const [selectedCardId, setSelectedCardId] = useState<string>('gpa');
+  const [selectedSection, setSelectedSection] = useState<string>('Academics');
   const [mapperConnectionId, setMapperConnectionId] = useState<string>('sis-production');
   const [mapperSqlQuery, setMapperSqlQuery] = useState<string>('');
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
+
+  const allSections = [...new Set(bindings.map(b => b.section))];
+  const filteredBindings = bindings.filter(b => b.section === selectedSection);
 
   // Sync state values when selected card changes
   useEffect(() => {
@@ -687,18 +1127,24 @@ const ConnectivityTest: React.FC = () => {
               <div>
                 <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Target Portal View</label>
                 <select
-                  disabled
-                  value="Academics"
-                  className="w-full text-xs font-bold bg-white border border-gray-150 rounded-xl px-3 py-2.5 text-gray-800 focus:outline-none cursor-not-allowed"
+                  value={selectedSection}
+                  onChange={(e) => {
+                    setSelectedSection(e.target.value);
+                    const first = bindings.find(b => b.section === e.target.value);
+                    if (first) setSelectedCardId(first.cardId);
+                  }}
+                  className="w-full text-xs font-bold bg-white border border-gray-150 rounded-xl px-3 py-2.5 text-gray-800 focus:outline-none cursor-pointer"
                 >
-                  <option value="Academics">Academics Section</option>
+                  {allSections.map(s => (
+                    <option key={s} value={s}>{s} Section</option>
+                  ))}
                 </select>
               </div>
 
               <div>
                 <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Target UI Card Component</label>
-                <div className="space-y-1.5">
-                  {bindings.map(b => (
+                <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+                  {filteredBindings.map(b => (
                     <button
                       key={b.cardId}
                       type="button"
@@ -776,11 +1222,13 @@ const ConnectivityTest: React.FC = () => {
                 type="button"
                 onClick={(e) => {
                   e.preventDefault();
-                  setBindings(prev => prev.map(b => b.cardId === selectedCardId ? {
+                  const updated = bindings.map(b => b.cardId === selectedCardId ? {
                     ...b,
                     connectionId: mapperConnectionId,
                     sqlQuery: mapperSqlQuery
-                  } : b));
+                  } : b);
+                  setBindings(updated);
+                  localStorage.setItem('juc_card_sql_queries', JSON.stringify(updated));
                   setSaveSuccessMessage(`Successfully updated SQL mapping code for "${bindings.find(b => b.cardId === selectedCardId)?.cardName}"!`);
                   setTimeout(() => setSaveSuccessMessage(null), 4000);
                 }}

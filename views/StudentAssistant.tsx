@@ -12,16 +12,8 @@ import {
   Loader2,
   X
 } from 'lucide-react';
-import { 
-  STUDENT_MOCK, 
-  CURRENT_COURSES, 
-  FEES_MOCK, 
-  AID_MOCK,
-  RETENTION_MOCK,
-  MEDICAL_MOCK,
-  APPOINTMENTS_MOCK
-} from '../constants';
-import { getAssistantResponse } from '../services/geminiService';
+
+
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -36,7 +28,7 @@ const StudentAssistant: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
-      text: `Hi ${STUDENT_MOCK.name}! I'm your Jericho University Assistant. How can I help you today? You can ask me about your holds, fees, or course schedule.`,
+      text: `Hi! I'm your Jericho University Assistant. How can I help you today? You can ask me about your holds, fees, or course schedule.`,
       sender: 'bot',
       timestamp: new Date()
     }
@@ -67,29 +59,14 @@ const StudentAssistant: React.FC = () => {
     setInput('');
     setIsTyping(true);
 
-    const context = {
-      student: STUDENT_MOCK,
-      courses: CURRENT_COURSES,
-      finances: { fees: FEES_MOCK, aid: AID_MOCK },
-      retention: RETENTION_MOCK,
-      medical: MEDICAL_MOCK,
-      appointments: APPOINTMENTS_MOCK
+    const botMessage: Message = {
+      id: (Date.now() + 1).toString(),
+      text: `You said: "${input}"\n\n*(Local mode — connect a database in Source Connectivity to enable AI responses.)*`,
+      sender: 'bot',
+      timestamp: new Date()
     };
-
-    try {
-      const botResponseText = await getAssistantResponse(input, context);
-      const botMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: botResponseText,
-        sender: 'bot',
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, botMessage]);
-    } catch (error) {
-      console.error("Chat error:", error);
-    } finally {
-      setIsTyping(false);
-    }
+    setMessages(prev => [...prev, botMessage]);
+    setIsTyping(false);
   };
 
   const quickQuestions = [

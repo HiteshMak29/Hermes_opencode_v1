@@ -212,12 +212,48 @@ async function startServer() {
       if (upperQuery.includes("SUM(GPA") || upperQuery.includes("CURRENT_GPA") || upperQuery.includes("ROUND(SUM(GPA")) {
         columns = ["current_gpa"];
         rows = [{ current_gpa: 3.85 }];
-      } else if (upperQuery.includes("CREDITS") || upperQuery.includes("COMPLETED_CREDITS")) {
+      } else if ((upperQuery.includes("STUDENT_COURSES") && (upperQuery.includes("COURSE_CODE") || upperQuery.includes("COURSE_NAME"))) || (upperQuery.includes("COURSE_CODE") && upperQuery.includes("COURSE_NAME"))) {
+        columns = ["term_id", "term_name", "year", "code", "name", "division", "attendance", "credits", "mid_term_grade", "final_grade", "points"];
+        rows = [
+          { term_id: "FA24", term_name: "Fall Semester", year: 2024, code: "CS101", name: "Introduction to Programming", division: "UG", attendance: 92, credits: 4, mid_term_grade: "A-", final_grade: "A", points: 12 },
+          { term_id: "FA24", term_name: "Fall Semester", year: 2024, code: "MATH201", name: "Calculus I", division: "UG", attendance: 88, credits: 3, mid_term_grade: "B", final_grade: "B+", points: 9.99 },
+          { term_id: "FA24", term_name: "Fall Semester", year: 2024, code: "ENG101", name: "English Composition", division: "UG", attendance: 95, credits: 3, mid_term_grade: "B+", final_grade: "A-", points: 11.01 },
+          { term_id: "SP24", term_name: "Spring Semester", year: 2024, code: "CS201", name: "Data Structures", division: "UG", attendance: 90, credits: 4, mid_term_grade: "B-", final_grade: "B", points: 8 },
+          { term_id: "SP24", term_name: "Spring Semester", year: 2024, code: "MATH202", name: "Calculus II", division: "UG", attendance: 85, credits: 3, mid_term_grade: "C+", final_grade: "B-", points: 6.9 },
+          { term_id: "SP24", term_name: "Spring Semester", year: 2024, code: "PHY101", name: "Physics I", division: "UG", attendance: 78, credits: 4, mid_term_grade: "C", final_grade: "C+", points: 6 },
+        ];
+      } else if (upperQuery.includes("COMPLETED_CREDITS") || (upperQuery.includes("CREDITS") && !upperQuery.includes("STUDENT_COURSES"))) {
         columns = ["completed_credits", "required_credits"];
         rows = [{ completed_credits: 112, required_credits: 120 }];
       } else if (upperQuery.includes("PROGRAM_NAME") || upperQuery.includes("MAJOR") || upperQuery.includes("STUDENT_PROGRAMS")) {
         columns = ["major", "minor", "programName"];
         rows = [{ major: "Computer Science", minor: "Calculus", programName: "School of Engineering" }];
+      } else if (upperQuery.includes("GROUP BY") && upperQuery.includes("FEE_TYPE")) {
+        columns = ["name", "value"];
+        rows = [
+          { name: "Tuition", value: 6250 },
+          { name: "Lab Fee", value: 350 },
+          { name: "Student Services", value: 120 },
+          { name: "Technology Fee", value: 200 },
+        ];
+      } else if (upperQuery.includes("STUDENT_FEES") && (upperQuery.includes("FEE_TYPE") || upperQuery.includes("ORDER BY"))) {
+        columns = ["fee_type", "description", "amount", "due_date", "paid"];
+        rows = [
+          { fee_type: "Tuition", description: "Fall 2024 Tuition", amount: 6250, due_date: "2024-10-30", paid: 0 },
+          { fee_type: "Lab Fee", description: "Computer Science Lab", amount: 350, due_date: "2024-10-30", paid: 0 },
+          { fee_type: "Student Services", description: "Campus Activity Fee", amount: 120, due_date: "2024-10-30", paid: 0 },
+          { fee_type: "Technology Fee", description: "IT Infrastructure", amount: 200, due_date: "2024-10-30", paid: 0 },
+        ];
+      } else if (upperQuery.includes("STUDENT_FEES") || (upperQuery.includes("AMOUNT") && upperQuery.includes("PAID") && upperQuery.includes("0"))) {
+        columns = ["total_balance"];
+        rows = [{ total_balance: 8420 }];
+      } else if (upperQuery.includes("FINANCIAL_AID") || upperQuery.includes("AID_TYPE")) {
+        columns = ["aid_type", "amount", "status", "award_date"];
+        rows = [
+          { aid_type: "Federal Pell Grant", amount: 3750, status: "AWARDED", award_date: "2024-08-15" },
+          { aid_type: "State Merit Scholarship", amount: 2500, status: "AWARDED", award_date: "2024-08-15" },
+          { aid_type: "University Grant", amount: 1500, status: "PENDING", award_date: "2024-09-01" },
+        ];
       } else if (upperQuery.includes("ACADEMIC_TERMS") || upperQuery.includes("TERM_ID") || upperQuery.includes("YEAR_TERM_TABLE") || upperQuery.includes("TERM_NAME") || upperQuery.includes("STUD_TERM_SUM_DIV")) {
         columns = ["term_id", "term", "year"];
         rows = [
@@ -325,44 +361,6 @@ async function startServer() {
       success: false,
       error: `Database platform '${dbType}' is not currently configured for executing card telemetry.`
     });
-  });
-
-  // Legacy fallback SIS URL query handler for backwards compatibility
-
-  // LMS (Learning Management System) API
-  app.get("/api/lms/courses/:studentId", async (req, res) => {
-    const { studentId } = req.params;
-    const LMS_API_URL = process.env.LMS_API_URL;
-    const LMS_API_KEY = process.env.LMS_API_KEY;
-
-    if (!LMS_API_URL || !LMS_API_KEY) {
-      return res.status(500).json({ error: "LMS credentials not configured" });
-    }
-
-    try {
-      // Real API call to LMS would go here
-      res.json([{ id: "CS101", name: "Intro to Programming", grade: "A" }]);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch from LMS" });
-    }
-  });
-
-  // CRM (Customer Relationship Management) API
-  app.get("/api/crm/leads/:email", async (req, res) => {
-    const { email } = req.params;
-    const CRM_API_URL = process.env.CRM_API_URL;
-    const CRM_API_KEY = process.env.CRM_API_KEY;
-
-    if (!CRM_API_URL || !CRM_API_KEY) {
-      return res.status(500).json({ error: "CRM credentials not configured" });
-    }
-
-    try {
-      // Real API call to CRM would go here
-      res.json({ email, status: "Active Lead", lastContact: "2026-04-01" });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch from CRM" });
-    }
   });
 
   // --- VITE MIDDLEWARE ---

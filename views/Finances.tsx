@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   CreditCard, 
   DollarSign, 
@@ -19,9 +19,10 @@ import {
   Check,
   Lock,
   Compass,
-  FileText
+  FileText,
+  Terminal
 } from 'lucide-react';
-import { FEES_MOCK, AID_MOCK, SEMESTERS_MOCK, SCHOLARSHIPS_MOCK, STUDENT_MOCK } from '../constants';
+import { SCHOLARSHIPS_MOCK, STUDENT_MOCK } from '../constants';
 import { 
   PieChart as RePieChart, 
   Pie, 
@@ -31,9 +32,136 @@ import {
 } from 'recharts';
 import ContactSection from '../components/ContactSection';
 
+interface QueryResult {
+  columns: string[];
+  rows: string[][];
+}
+
+const executeCardQuery = async (binding: any, connections: any[]): Promise<QueryResult | null> => {
+  const connection = connections.find((c: any) => c.id === binding.connectionId);
+  try {
+    const res = await fetch('/api/sis/staging/execute-card-query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ connection: connection || null, sqlQuery: binding.sqlQuery }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.success || !data.columns || !data.rows) return null;
+    const cols: string[] = data.columns;
+    const rows: string[][] = data.rows.map((row: any) => cols.map((col: string) => String(row[col] ?? '')));
+    return { columns: cols, rows };
+  } catch {
+    return null;
+  }
+};
+
+const getRowValue = (result: QueryResult, colName: string, rowIndex = 0): string | undefined => {
+  const idx = result.columns.findIndex(c => c.toLowerCase() === colName.toLowerCase());
+  if (idx === -1 || !result.rows[rowIndex]) return undefined;
+  return result.rows[rowIndex][idx];
+};
+
 const FinanceDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'billing' | 'scholarships'>('billing');
-  const [selectedTermId, setSelectedTermId] = useState<string>('f24'); // Defaulting to current
+  const [selectedTermId, setSelectedTermId] = useState<string>('f24');
+  
+  // Dynamic data states
+  const [bindings, setBindings] = useState<any[]>(() => {
+    try {
+      const cached = localStorage.getItem('juc_card_sql_queries');
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return [];
+  });
+  const [connections, setConnections] = useState<any[]>(() => {
+    try {
+      const cached = localStorage.getItem('juc_rdbms_connections');
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return [];
+  });
+  const [dynamicFees, setDynamicFees] = useState<any[]>([]);
+  const [dynamicAid, setDynamicAid] = useState<any[]>([]);
+  const [dynamicBalance, setDynamicBalance] = useState<number | null>(null);
+  const [dynamicChartData, setDynamicChartData] = useState<{ name: string; value: number; color: string }[]>([]);
+  const [dynamicTerms, setDynamicTerms] = useState<{ id: string; term: string; year: number }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [devModeActive, setDevModeActive] = useState<boolean>(() => {
+    return localStorage.getItem('juc_finance_dev_mode') === 'true';
+  });
+  const [inspectingBinding, setInspectingBinding] = useState<any | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem('juc_finance_dev_mode', String(devModeActive));
+  }, [devModeActive]);
+
+  const getConnectionLabel = (connId: string) => {
+    if (connId === 'sis-production') {
+      return 'Jericho SIS Production (Default Postgres Bridge)';
+    }
+    const found = connections.find(c => c.id === connId);
+    return found ? `${found.name} (${found.dbType.toUpperCase()})` : 'Jericho SIS Production (Default Postgres Bridge)';
+  };
+
+  // Fetch dynamic data
+  useEffect(() => {
+    const fetchAll = async () => {
+      setLoading(true);
+
+      const [feesResult, aidResult, balanceResult, costResult, termsResult] = await Promise.all([
+        executeCardQuery(bindings.find(b => b.cardId === 'fin-fees'), connections),
+        executeCardQuery(bindings.find(b => b.cardId === 'fin-aid'), connections),
+        executeCardQuery(bindings.find(b => b.cardId === 'fin-balance'), connections),
+        executeCardQuery(bindings.find(b => b.cardId === 'fin-cost-dist'), connections),
+        executeCardQuery(bindings.find(b => b.cardId === 'terms'), connections),
+      ]);
+
+      if (feesResult && feesResult.rows.length > 0) {
+        setDynamicFees(feesResult.rows.map((row, i) => ({
+          id: `fee-${i}`,
+          description: getRowValue(feesResult, 'description', i) || getRowValue(feesResult, 'fee_type', i) || '',
+          type: getRowValue(feesResult, 'fee_type', i) || getRowValue(feesResult, 'description', i) || '',
+          amount: parseFloat(getRowValue(feesResult, 'amount', i) || '0'),
+        })));
+      }
+
+      if (aidResult && aidResult.rows.length > 0) {
+        setDynamicAid(aidResult.rows.map((row, i) => ({
+          id: `aid-${i}`,
+          source: getRowValue(aidResult, 'aid_type', i) || getRowValue(aidResult, 'source', i) || '',
+          status: getRowValue(aidResult, 'status', i) || '',
+          amount: parseFloat(getRowValue(aidResult, 'amount', i) || '0'),
+        })));
+      }
+
+      if (balanceResult && balanceResult.rows.length > 0) {
+        const val = parseFloat(getRowValue(balanceResult, 'total_balance', 0) || getRowValue(balanceResult, 'outstanding_balance', 0) || '0');
+        setDynamicBalance(val);
+      }
+
+      if (costResult && costResult.rows.length > 0) {
+        const colors = ['#6366f1', '#8b5cf6', '#c7d2fe', '#a78bfa', '#818cf8'];
+        setDynamicChartData(costResult.rows.map((row, i) => ({
+          name: getRowValue(costResult, 'name', i) || getRowValue(costResult, 'fee_type', i) || '',
+          value: parseFloat(getRowValue(costResult, 'value', i) || getRowValue(costResult, 'amount', i) || '0'),
+          color: colors[i % colors.length],
+        })));
+      }
+
+      if (termsResult && termsResult.rows.length > 0) {
+        const terms = termsResult.rows.map((row, i) => ({
+          id: getRowValue(termsResult, 'term_id', i) || `term-${i}`,
+          term: getRowValue(termsResult, 'term', i) || getRowValue(termsResult, 'term_name', i) || `Term ${i}`,
+          year: parseInt(getRowValue(termsResult, 'year', i) || getRowValue(termsResult, 'term_year', i) || '2024'),
+        }));
+        setDynamicTerms(terms);
+      }
+      setLoading(false);
+    };
+    fetchAll();
+  }, [bindings, connections]);
   
   // Scholarship Finder State
   const [searchQuery, setSearchQuery] = useState('');
@@ -43,15 +171,12 @@ const FinanceDashboard: React.FC = () => {
   const [showDataSourceInfo, setShowDataSourceInfo] = useState(true);
 
   // Billing calculation
-  const totalFees = FEES_MOCK.reduce((acc, curr) => acc + curr.amount, 0);
-  const totalAid = AID_MOCK.reduce((acc, curr) => acc + curr.amount, 0);
-  const balance = totalFees - totalAid;
-
-  const chartData = [
-    { name: 'Tuition', value: 12500, color: '#6366f1' },
-    { name: 'Housing', value: 4500, color: '#8b5cf6' },
-    { name: 'Other', value: 1650, color: '#c7d2fe' },
-  ];
+  const fees = dynamicFees;
+  const aid = dynamicAid;
+  const totalFees = fees.reduce((acc, curr) => acc + curr.amount, 0);
+  const totalAid = aid.reduce((acc, curr) => acc + curr.amount, 0);
+  const balance = dynamicBalance !== null ? dynamicBalance : totalFees - totalAid;
+  const chartData = dynamicChartData.length > 0 ? dynamicChartData : [];
 
   // Scholarship filter logic
   const filteredScholarships = scholarshipList.filter(sch => {
@@ -128,12 +253,47 @@ const FinanceDashboard: React.FC = () => {
         </div>
       </header>
 
+      {/* Dev Mode Banner */}
+      <div className="flex flex-col sm:flex-row items-center sm:items-center justify-between gap-4 p-4 bg-purple-50/60 border border-purple-100 rounded-3xl animate-in fade-in duration-300">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-purple-100 text-purple-700 rounded-2xl">
+            <Terminal size={18} className="animate-pulse" />
+          </div>
+          <div className="text-left">
+            <span className="text-[9px] font-black uppercase tracking-widest text-purple-600 bg-purple-100/40 px-2 py-0.5 rounded-full block w-max">
+              Developer SQL Sandbox Tool
+            </span>
+            <p className="text-xs font-black text-slate-800 mt-1">Database Queries Visual Overlay</p>
+            <p className="text-[10px] text-slate-500">View real-time database queries & connection mappings bound to your UI cards.</p>
+          </div>
+        </div>
+        <button
+          onClick={() => setDevModeActive(!devModeActive)}
+          className={`w-full sm:w-auto p-1.5 px-4 text-xs font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer ${
+            devModeActive 
+              ? 'bg-purple-600 hover:bg-purple-700 text-white shadow-md' 
+              : 'bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 shadow-xs'
+          }`}
+        >
+          {devModeActive ? 'Disable Overlay' : 'Toggle SQL Overlay'}
+        </button>
+      </div>
+
       {/* RENDER BILLING TAB */}
       {activeTab === 'billing' && (
         <>
           {/* Term Filter only applicable for account statement */}
-          <div className="flex justify-end">
+          <div className={`flex justify-end ${devModeActive ? 'border-2 border-dashed border-purple-300 bg-purple-50/10 p-1.5 rounded-2xl' : ''}`}>
             <div className="relative inline-block text-left w-full md:w-64">
+              {devModeActive && (
+                <button
+                  onClick={() => setInspectingBinding(bindings.find(b => b.cardId === 'terms'))}
+                  className="absolute -top-3.5 right-2 px-2 bg-purple-600 hover:bg-purple-700 text-white rounded-full text-[8px] font-black uppercase tracking-wider shadow-sm flex items-center gap-1 cursor-pointer z-20 whitespace-nowrap"
+                >
+                  <Terminal size={8} />
+                  <span>SPEC</span>
+                </button>
+              )}
               <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 tracking-wider">Billing Period</label>
               <div className="relative group">
                 <select 
@@ -141,21 +301,46 @@ const FinanceDashboard: React.FC = () => {
                   onChange={(e) => setSelectedTermId(e.target.value)}
                   className="appearance-none w-full bg-white border border-gray-200 rounded-2xl px-5 py-3 pr-10 font-bold text-gray-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
                 >
-                  <option value="f24">Fall 2024 (Current)</option>
-                  {SEMESTERS_MOCK.map(sem => (
-                    <option key={sem.id} value={sem.id}>{sem.term} {sem.year}</option>
-                  ))}
+                  {dynamicTerms.length > 0 ? (
+                    dynamicTerms.map(sem => (
+                      <option key={sem.id} value={sem.id}>{sem.term} {sem.year}</option>
+                    ))
+                  ) : (
+                    <option value="f24">Fall 2024 (Current)</option>
+                  )}
                 </select>
                 <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
                   <ChevronDown size={18} />
                 </div>
               </div>
+              {devModeActive && (
+                <span 
+                  className="text-[8px] font-semibold text-purple-700 font-mono block text-left mt-1 whitespace-nowrap truncate cursor-help"
+                  title={getConnectionLabel(bindings.find(b => b.cardId === 'terms')?.connectionId)}
+                >
+                  {getConnectionLabel(bindings.find(b => b.cardId === 'terms')?.connectionId)}
+                </span>
+              )}
             </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-2 bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className={`lg:col-span-2 bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden ${devModeActive ? 'ring-2 ring-purple-300 ring-dashed' : ''}`}>
+              {devModeActive && (
+                <button
+                  onClick={() => setInspectingBinding(bindings.find(b => b.cardId === 'fin-balance'))}
+                  className="absolute mt-2 ml-2 p-1 px-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-full text-[8px] font-black uppercase tracking-wider shadow-md flex items-center gap-1 cursor-pointer z-10"
+                >
+                  <Terminal size={9} />
+                  <span>SQL INSPECT</span>
+                </button>
+              )}
               <div className="p-8 bg-indigo-900 text-white">
+                {devModeActive && (
+                  <span className="text-[8px] font-bold text-purple-300 font-mono block mb-2">
+                    {getConnectionLabel(bindings.find(b => b.cardId === 'fin-balance')?.connectionId)}
+                  </span>
+                )}
                 <div className="flex justify-between items-start mb-8">
                   <div>
                     <p className="text-indigo-200 text-xs font-bold uppercase tracking-widest mb-1">Total Outstanding Balance</p>
@@ -166,10 +351,10 @@ const FinanceDashboard: React.FC = () => {
                   </div>
                 </div>
                 <div className="flex gap-4">
-                  <button className="flex-1 bg-white text-indigo-900 py-3 rounded-xl font-bold hover:bg-indigo-50 transition-colors">
+                  <button disabled className="flex-1 bg-white/30 text-indigo-300 py-3 rounded-xl font-bold cursor-not-allowed opacity-50">
                     Make a Payment
                   </button>
-                  <button className="flex-1 bg-indigo-800 text-white py-3 rounded-xl font-bold border border-indigo-700 hover:bg-indigo-700 transition-colors">
+                  <button disabled className="flex-1 bg-indigo-800/30 text-white/50 py-3 rounded-xl font-bold border border-indigo-700/30 cursor-not-allowed opacity-50">
                     Payment Plans
                   </button>
                 </div>
@@ -184,7 +369,7 @@ const FinanceDashboard: React.FC = () => {
                   </button>
                 </div>
                 <div className="space-y-4">
-                  {FEES_MOCK.map((fee) => (
+                  {fees.map((fee) => (
                     <div key={fee.id} className="flex justify-between items-center py-2 border-b border-gray-50">
                       <div>
                         <p className="text-sm font-bold text-gray-800">{fee.description}</p>
@@ -203,11 +388,25 @@ const FinanceDashboard: React.FC = () => {
 
             {/* Financial Aid Breakdown */}
             <div className="space-y-6">
-              <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+              <div className={`bg-white p-6 rounded-3xl shadow-sm border border-gray-100 relative ${devModeActive ? 'ring-2 ring-purple-300 ring-dashed' : ''}`}>
+                {devModeActive && (
+                  <button
+                    onClick={() => setInspectingBinding(bindings.find(b => b.cardId === 'fin-cost-dist'))}
+                    className="absolute -top-3 left-1/2 -translate-x-1/2 p-1 px-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-full text-[8px] font-black uppercase tracking-wider shadow-md flex items-center gap-1 cursor-pointer z-10"
+                  >
+                    <Terminal size={9} />
+                    <span>SQL INSPECT</span>
+                  </button>
+                )}
                 <h3 className="font-bold text-gray-800 mb-6 flex items-center space-x-2">
                   <PieChart size={18} className="text-indigo-600" />
                   <span>Cost Distribution</span>
                 </h3>
+                {devModeActive && (
+                  <span className="text-[8px] font-bold text-purple-700 font-mono block mb-2">
+                    {getConnectionLabel(bindings.find(b => b.cardId === 'fin-cost-dist')?.connectionId)}
+                  </span>
+                )}
                 <div className="h-48 mb-6">
                   <ResponsiveContainer width="100%" height="100%">
                     <RePieChart>
@@ -241,19 +440,33 @@ const FinanceDashboard: React.FC = () => {
                 </div>
               </div>
 
-              <div className="bg-green-50 p-6 rounded-3xl border border-green-100">
+              <div className={`bg-green-50 p-6 rounded-3xl border border-green-100 relative ${devModeActive ? 'ring-2 ring-purple-300 ring-dashed' : ''}`}>
+                {devModeActive && (
+                  <button
+                    onClick={() => setInspectingBinding(bindings.find(b => b.cardId === 'fin-aid'))}
+                    className="absolute -top-3 left-1/2 -translate-x-1/2 p-1 px-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-full text-[8px] font-black uppercase tracking-wider shadow-md flex items-center gap-1 cursor-pointer z-10"
+                  >
+                    <Terminal size={9} />
+                    <span>SQL INSPECT</span>
+                  </button>
+                )}
                 <div className="flex items-center space-x-2 text-green-700 mb-4">
                   <ShieldCheck size={20} />
                   <h3 className="font-bold">Financial Aid Awarded</h3>
                 </div>
+                {devModeActive && (
+                  <span className="text-[8px] font-bold text-purple-700 font-mono block mb-2">
+                    {getConnectionLabel(bindings.find(b => b.cardId === 'fin-aid')?.connectionId)}
+                  </span>
+                )}
                 <div className="space-y-4">
-                  {AID_MOCK.map((aid) => (
-                    <div key={aid.id} className="flex justify-between items-start">
+                  {aid.map((item) => (
+                    <div key={item.id} className="flex justify-between items-start">
                       <div>
-                        <p className="text-sm font-bold text-green-900">{aid.source}</p>
-                        <p className="text-[10px] text-green-600 font-bold uppercase">{aid.status}</p>
+                        <p className="text-sm font-bold text-green-900">{item.source}</p>
+                        <p className="text-[10px] text-green-600 font-bold uppercase">{item.status}</p>
                       </div>
-                      <span className="font-bold text-green-800">${aid.amount.toLocaleString()}</span>
+                      <span className="font-bold text-green-800">${item.amount.toLocaleString()}</span>
                     </div>
                   ))}
                   <div className="pt-4 border-t border-green-200 flex justify-between items-center">
@@ -583,6 +796,72 @@ const FinanceDashboard: React.FC = () => {
                 <p className="text-xs text-gray-500 leading-relaxed mt-1">
                   Private external program data is gathered securely using our federal integration API pipelines. Applications are routed through the college's secure aid terminal.
                 </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SQL Inspector Overlay Modal */}
+      {inspectingBinding && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-xl w-full border border-slate-200 overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 text-left">
+            <div className="bg-slate-900 text-white p-5 flex justify-between items-center font-mono">
+              <div className="flex items-center gap-2">
+                <Terminal size={14} className="text-purple-400" />
+                <h3 className="font-extrabold text-xs uppercase tracking-wider">
+                  SQL Source Binding Inspector
+                </h3>
+              </div>
+              <button
+                onClick={() => setInspectingBinding(null)}
+                className="py-1 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[10px] font-black uppercase tracking-widest cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider font-mono block animate-fade-in">Component Target Card</span>
+                <p className="text-sm font-black text-slate-900">{inspectingBinding.cardName}</p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="bg-slate-50 p-3 rounded-xl border border-gray-100 text-xs">
+                  <span className="text-[9px] font-extrabold text-gray-400 uppercase tracking-wider block mb-1">Bounded Connection</span>
+                  <span className="font-black text-indigo-650 truncate block" title={getConnectionLabel(inspectingBinding.connectionId)}>
+                    {getConnectionLabel(inspectingBinding.connectionId)}
+                  </span>
+                </div>
+                <div className="bg-slate-50 p-3 rounded-xl border border-gray-100 text-xs text-left">
+                  <span className="text-[9px] font-extrabold text-gray-400 uppercase tracking-wider block mb-1">Binding Mode</span>
+                  <span className="inline-flex items-center gap-1.5 text-xs font-bold text-purple-700">
+                    <span className="w-1.5 h-1.5 bg-purple-500 rounded-full"></span>
+                    <span>Dynamic SQL Map</span>
+                  </span>
+                </div>
+              </div>
+              <div className="space-y-1 text-left relative">
+                <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider font-mono block mb-1">
+                  Active SQL Credentials Query Statement
+                </span>
+                <div className="bg-slate-950 text-emerald-400 p-4 rounded-xl border border-slate-850 font-mono text-xs overflow-x-auto select-all shadow-inner leading-relaxed max-h-[160px] overflow-y-auto">
+                  <pre className="font-mono">{inspectingBinding.sqlQuery}</pre>
+                </div>
+              </div>
+              <div className="p-3.5 bg-indigo-50/50 border border-indigo-100 rounded-xl flex items-start gap-2.5 text-[11px] text-indigo-950">
+                <Info size={14} className="text-indigo-600 shrink-0 mt-0.5" />
+                <p className="leading-snug text-slate-650">
+                  This SQL statement is mapped to target your localized MSSQL server instance schemas. 
+                  You can update this code syntax anytime in the <strong>Source Connectivity</strong> developer manager console page.
+                </p>
+              </div>
+              <div className="pt-2 border-t border-gray-100 flex justify-end">
+                <button
+                  onClick={() => setInspectingBinding(null)}
+                  className="px-5 py-2.5 bg-slate-950 hover:bg-slate-800 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer"
+                >
+                  Confirm & Close
+                </button>
               </div>
             </div>
           </div>

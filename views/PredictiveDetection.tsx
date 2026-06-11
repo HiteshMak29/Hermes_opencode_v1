@@ -41,31 +41,39 @@ import {
   AID_MOCK 
 } from '../constants';
 import ContactSection from '../components/ContactSection';
-import { analyzeStudentRisk, RiskAnalysis } from '../services/geminiService';
+
+
+interface RiskFactor {
+  name: string;
+  impact: string;
+  description: string;
+  category?: string;
+  details?: string;
+}
+
+interface RiskAnalysis {
+  confidence: number;
+  riskLevel: string;
+  riskScore: number;
+  summary: string;
+  factors: RiskFactor[];
+  trend: { month: string; score: number }[];
+  recommendations: string[];
+}
+
+const DEFAULT_ANALYSIS: RiskAnalysis = {
+  confidence: 0,
+  riskLevel: '',
+  riskScore: 0,
+  summary: '',
+  factors: [],
+  trend: [],
+  recommendations: []
+};
 
 const PredictiveDetection: React.FC = () => {
-  const [analysis, setAnalysis] = useState<RiskAnalysis | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const performAnalysis = async () => {
-      setLoading(true);
-      const studentData = {
-        profile: STUDENT_MOCK,
-        academicHistory: SEMESTERS_MOCK,
-        currentCourses: CURRENT_COURSES,
-        financials: {
-          fees: FEES_MOCK,
-          aid: AID_MOCK
-        }
-      };
-      const result = await analyzeStudentRisk(studentData);
-      setAnalysis(result);
-      setLoading(false);
-    };
-
-    performAnalysis();
-  }, []);
+  const [analysis, setAnalysis] = useState<RiskAnalysis>(DEFAULT_ANALYSIS);
+  const [loading, setLoading] = useState(false);
 
   if (CURRENT_USER_ROLE === 'Student') {
     return (
