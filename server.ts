@@ -365,15 +365,16 @@ async function startServer() {
 
   // Real database connection test endpoint
   app.post("/api/test-connection", async (req, res) => {
-    const { dbType, dbHost, dbPort, dbName, dbUser, dbPass, dbSslMode } = req.body;
+    const { sourceType, dbType, dbHost, dbPort, dbName, dbUser, dbPass, dbSslMode, domain, baseDn, apiUrl, apiKey, apiPlatform } = req.body;
+    const actualType = sourceType || dbType;
 
-    if (!dbType || !dbHost) {
-      return res.status(400).json({ success: false, error: "Missing required connection parameters" });
+    if (!actualType) {
+      return res.status(400).json({ success: false, error: "Missing source type" });
     }
 
     const startTime = Date.now();
 
-    if (dbType === "sqlserver" || dbType === "mssql") {
+    if (actualType === "sqlserver" || actualType === "mssql") {
       try {
         const config = {
           user: dbUser,
@@ -395,7 +396,7 @@ async function startServer() {
       } catch (error: any) {
         return res.json({ success: false, error: error.message, latency: Date.now() - startTime });
       }
-    } else if (dbType === "postgresql" || dbType === "postgres") {
+    } else if (actualType === "postgresql" || actualType === "postgres") {
       try {
         const poolConfig: pg.PoolConfig = {
           user: dbUser,
@@ -416,8 +417,53 @@ async function startServer() {
       } catch (error: any) {
         return res.json({ success: false, error: error.message, latency: Date.now() - startTime });
       }
+    } else if (actualType === "active-directory") {
+      // LDAP bind test — requires ldapjs package
+      let ldap: any;
+      try {
+        ldap = await import('ldapjs');
+        const client = ldap.createClient({
+          url: `ldap${dbSslMode === 'require' || dbSslMode === 'prefer' ? 's' : ''}://${domain || dbHost}:${parseInt(dbPort) || 389}`,
+          timeout: 5000,
+          connectTimeout: 5000,
+          tlsOptions: dbSslMode === 'require' || dbSslMode === 'prefer' ? { rejectUnauthorized: false } : undefined,
+        });
+        await new Promise<void>((resolve, reject) => {
+          client.bind(dbUser, dbPass, (err: any) => {
+            client.unbind();
+            if (err) reject(new Error(err.message || 'LDAP bind failed'));
+            else resolve();
+          });
+        });
+        return res.json({ success: true, latency: Date.now() - startTime });
+      } catch (error: any) {
+        return res.json({ success: false, error: `LDAP connection failed: ${error.message}`, latency: Date.now() - startTime });
+      }
+    } else if (['canvas', 'blackboard', 'moodle', 'banner', 'ellucian', 'custom-api'].includes(actualType)) {
+      // API-based sources: attempt an HTTP GET to the provided URL
+      try {
+        if (!apiUrl) throw new Error('API URL is required');
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const response = await fetch(apiUrl, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${apiKey || ''}`,
+            'Content-Type': 'application/json',
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (response.ok || response.status < 500) {
+          return res.json({ success: true, latency: Date.now() - startTime, statusCode: response.status });
+        } else {
+          return res.json({ success: false, error: `API returned status ${response.status}`, latency: Date.now() - startTime });
+        }
+      } catch (error: any) {
+        return res.json({ success: false, error: `API request failed: ${error.message}`, latency: Date.now() - startTime });
+      }
     } else {
-      return res.status(400).json({ success: false, error: `Unsupported database type: '${dbType}'` });
+      return res.status(400).json({ success: false, error: `Unsupported source type: '${actualType}'` });
     }
   });
 

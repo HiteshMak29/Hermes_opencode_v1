@@ -13,6 +13,7 @@
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
     "express": "^5.2.1",
+    "ldapjs": "^3.0.7",
     "lucide-react": "^0.563.0",
     "motion": "^12.40.0",
     "mssql": "^12.5.5",

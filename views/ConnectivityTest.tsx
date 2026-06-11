@@ -25,20 +25,28 @@ import {
 } from 'lucide-react';
 import { useCollegeBranding } from '../brandingConfig';
 
-export interface RDBMSConnection {
+export interface SourceConnection {
   id: string;
   name: string;
-  dbType: string; // 'postgresql' | 'mysql' | 'oracle' | 'sqlserver' | 'sqlite'
-  dbHost: string;
-  dbPort: string;
-  dbName: string;
-  dbUser: string;
-  dbPass: string;
-  dbSslMode: string;
+  sourceType: string;
   status: 'online' | 'offline' | 'untested' | 'testing';
   latency?: number;
   lastTested?: string;
   errorMessage?: string;
+  // RDBMS fields
+  dbHost?: string;
+  dbPort?: string;
+  dbName?: string;
+  dbUser?: string;
+  dbPass?: string;
+  dbSslMode?: string;
+  // Active Directory fields
+  domain?: string;
+  baseDn?: string;
+  // API-based fields (LMS, HigherEd, Custom)
+  apiUrl?: string;
+  apiKey?: string;
+  apiPlatform?: string;
 }
 
 export interface CardQueryBinding {
@@ -529,7 +537,7 @@ const ConnectivityTest: React.FC = () => {
   const { activeCollege } = useCollegeBranding();
 
   // Load or Initialize Connections Spec
-  const [connections, setConnections] = useState<RDBMSConnection[]>(() => {
+  const [connections, setConnections] = useState<SourceConnection[]>(() => {
     const cached = localStorage.getItem('juc_rdbms_connections');
     if (cached) {
       try {
@@ -595,6 +603,13 @@ const ConnectivityTest: React.FC = () => {
   const [dbPass, setDbPass] = useState('');
   const [dbSslMode, setDbSslMode] = useState('require');
   const [showPassword, setShowPassword] = useState(false);
+  // AD-specific
+  const [domain, setDomain] = useState('');
+  const [baseDn, setBaseDn] = useState('');
+  // API-based (LMS, HigherEd, Custom)
+  const [apiUrl, setApiUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [apiPlatform, setApiPlatform] = useState('canvas');
 
   // Tester states
   const [activeTestingId, setActiveTestingId] = useState<string | null>(null);
@@ -628,22 +643,35 @@ const ConnectivityTest: React.FC = () => {
     setDbUser('');
     setDbPass('');
     setDbSslMode('require');
+    setDomain('');
+    setBaseDn('');
+    setApiUrl('');
+    setApiKey('');
+    setApiPlatform('canvas');
     setIsFormOpen(true);
   };
 
-  const handleOpenEditForm = (conn: RDBMSConnection) => {
+  const handleOpenEditForm = (conn: SourceConnection) => {
     setFormMode('edit');
     setEditingId(conn.id);
     setConnName(conn.name);
-    setDbType(conn.dbType);
-    setDbHost(conn.dbHost);
-    setDbPort(conn.dbPort);
-    setDbName(conn.dbName);
-    setDbUser(conn.dbUser);
-    setDbPass(conn.dbPass);
-    setDbSslMode(conn.dbSslMode);
+    setDbType(conn.sourceType);
+    setDbHost(conn.dbHost || '');
+    setDbPort(conn.dbPort || '5432');
+    setDbName(conn.dbName || '');
+    setDbUser(conn.dbUser || '');
+    setDbPass(conn.dbPass || '');
+    setDbSslMode(conn.dbSslMode || 'require');
+    setDomain(conn.domain || '');
+    setBaseDn(conn.baseDn || '');
+    setApiUrl(conn.apiUrl || '');
+    setApiKey(conn.apiKey || '');
+    setApiPlatform(conn.apiPlatform || 'canvas');
     setIsFormOpen(true);
   };
+
+  const isRdbms = (type: string) => ['postgresql', 'mysql', 'oracle', 'sqlserver', 'sqlite'].includes(type);
+  const isApiBased = (type: string) => ['canvas', 'blackboard', 'moodle', 'banner', 'ellucian', 'custom-api'].includes(type);
 
   const handleDbTypeChange = (type: string) => {
     setDbType(type);
@@ -651,6 +679,10 @@ const ConnectivityTest: React.FC = () => {
     else if (type === 'oracle') setDbPort('1521');
     else if (type === 'sqlserver') setDbPort('1433');
     else if (type === 'sqlite') setDbPort('N/A');
+    else if (type === 'active-directory') setDbPort('389');
+    else if (type === 'canvas') setDbPort('443');
+    else if (type === 'blackboard' || type === 'moodle' || type === 'banner' || type === 'ellucian') setDbPort('443');
+    else if (type === 'custom-api') setDbPort('');
     else setDbPort('5432');
   };
 
@@ -658,31 +690,35 @@ const ConnectivityTest: React.FC = () => {
     e.preventDefault();
     const finalName = connName.trim() || `${dbType.toUpperCase()} Gateway`;
 
+    const baseFields = {
+      name: finalName,
+      sourceType: dbType,
+      status: 'untested' as const,
+    };
+
+    let typeFields: any;
+    if (isRdbms(dbType)) {
+      typeFields = { dbHost, dbPort, dbName, dbUser, dbPass, dbSslMode };
+    } else if (dbType === 'active-directory') {
+      typeFields = { domain: domain, dbPort, dbUser, dbPass, baseDn, dbSslMode };
+    } else if (isApiBased(dbType)) {
+      typeFields = { apiUrl, apiKey, apiPlatform: dbType };
+    } else {
+      typeFields = {};
+    }
+
     if (formMode === 'edit' && editingId) {
       setConnections(prev => prev.map(c => c.id === editingId ? {
         ...c,
-        name: finalName,
-        dbType,
-        dbHost,
-        dbPort,
-        dbName,
-        dbUser,
-        dbPass,
-        dbSslMode,
-        ...(c.dbHost !== dbHost || c.dbPort !== dbPort ? { status: 'untested', latency: undefined, errorMessage: undefined } : {})
+        ...baseFields,
+        ...typeFields,
+        ...(isRdbms(dbType) && (c.dbHost !== dbHost || c.dbPort !== dbPort) ? { status: 'untested', latency: undefined, errorMessage: undefined } : {})
       } : c));
     } else {
-      const newConn: RDBMSConnection = {
+      const newConn: SourceConnection = {
         id: 'conn-' + Date.now(),
-        name: finalName,
-        dbType,
-        dbHost,
-        dbPort,
-        dbName,
-        dbUser,
-        dbPass,
-        dbSslMode,
-        status: 'untested'
+        ...baseFields,
+        ...typeFields,
       };
       setConnections(prev => [...prev, newConn]);
     }
@@ -704,16 +740,20 @@ const ConnectivityTest: React.FC = () => {
     setActiveTestingId(connId);
     setTestModalOpen(true);
     setDbTestActive(true);
-    setDbTestFeedback(`Initializing physical wire connection to ${conn.name}...`);
+    setDbTestFeedback(`Initializing connection to ${conn.name}...`);
 
     setConnections(prev => prev.map(c => c.id === connId ? { ...c, status: 'testing' } : c));
 
+    const targetLabel = isApiBased(conn.sourceType) ? conn.apiUrl || conn.sourceType :
+                        conn.sourceType === 'active-directory' ? conn.domain || 'LDAP' :
+                        `${conn.dbHost}:${conn.dbPort}`;
+
     setDbTestSteps([
-      { label: `DNS Lookup & network route verification to ${conn.dbHost}`, status: 'running' },
-      { label: `TCP port handshaking on port ${conn.dbPort}`, status: 'idle' },
-      { label: `SSL/TLS tunnel protocol validation (${conn.dbSslMode})`, status: 'idle' },
-      { label: `Database user authentication handshake`, status: 'idle' },
-      { label: `Metadata retrieval validation on schema "${conn.dbName}"`, status: 'idle' }
+      { label: `DNS Lookup & network route verification to ${targetLabel}`, status: 'running' },
+      { label: `TCP port handshaking`, status: 'idle' },
+      { label: `SSL/TLS tunnel protocol validation`, status: 'idle' },
+      { label: `Authentication handshake`, status: 'idle' },
+      { label: `Schema / metadata retrieval validation`, status: 'idle' }
     ]);
 
     // Steps 1-3: simulated network handshake (UI animation)
@@ -750,18 +790,18 @@ const ConnectivityTest: React.FC = () => {
     // Step 4-5: real connection test via server
     setTimeout(async () => {
       try {
+        const payload: any = { sourceType: conn.sourceType };
+        if (isRdbms(conn.sourceType)) {
+          Object.assign(payload, { dbType: conn.sourceType, dbHost: conn.dbHost, dbPort: conn.dbPort, dbName: conn.dbName, dbUser: conn.dbUser, dbPass: conn.dbPass, dbSslMode: conn.dbSslMode });
+        } else if (conn.sourceType === 'active-directory') {
+          Object.assign(payload, { dbType: conn.sourceType, dbHost: conn.domain, dbPort: conn.dbPort, dbUser: conn.dbUser, dbPass: conn.dbPass, dbSslMode: conn.dbSslMode, baseDn: conn.baseDn });
+        } else if (isApiBased(conn.sourceType)) {
+          Object.assign(payload, { apiUrl: conn.apiUrl, apiKey: conn.apiKey, apiPlatform: conn.sourceType });
+        }
         const res = await fetch('/api/test-connection', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            dbType: conn.dbType,
-            dbHost: conn.dbHost,
-            dbPort: conn.dbPort,
-            dbName: conn.dbName,
-            dbUser: conn.dbUser,
-            dbPass: conn.dbPass,
-            dbSslMode: conn.dbSslMode,
-          }),
+          body: JSON.stringify(payload),
         });
         const data = await res.json();
 
@@ -978,25 +1018,43 @@ const ConnectivityTest: React.FC = () => {
 
                     <td className="py-4 px-4 font-bold">
                       <span className={`px-2 py-0.5 text-[9px] font-black uppercase tracking-wider rounded-md border ${
-                        conn.dbType === 'postgresql' ? 'bg-blue-50 border-blue-100 text-blue-700' :
-                        conn.dbType === 'mysql' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' :
-                        conn.dbType === 'sqlite' ? 'bg-amber-50 border-amber-100 text-amber-700' :
+                        conn.sourceType === 'postgresql' ? 'bg-blue-50 border-blue-100 text-blue-700' :
+                        conn.sourceType === 'mysql' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' :
+                        conn.sourceType === 'sqlite' ? 'bg-amber-50 border-amber-100 text-amber-700' :
+                        conn.sourceType === 'active-directory' ? 'bg-violet-50 border-violet-100 text-violet-700' :
+                        conn.sourceType === 'canvas' || conn.sourceType === 'blackboard' || conn.sourceType === 'moodle' ? 'bg-cyan-50 border-cyan-100 text-cyan-700' :
+                        conn.sourceType === 'banner' || conn.sourceType === 'ellucian' ? 'bg-rose-50 border-rose-100 text-rose-700' :
                         'bg-purple-50 border-purple-100 text-purple-700'
                       }`}>
-                        {conn.dbType}
+                        {conn.sourceType === 'active-directory' ? 'Active Directory' :
+                         conn.sourceType === 'canvas' ? 'Canvas LMS' :
+                         conn.sourceType === 'blackboard' ? 'Blackboard' :
+                         conn.sourceType === 'moodle' ? 'Moodle' :
+                         conn.sourceType === 'banner' ? 'Banner' :
+                         conn.sourceType === 'ellucian' ? 'Ellucian' :
+                         conn.sourceType === 'custom-api' ? 'Custom API' :
+                         conn.sourceType}
                       </span>
                     </td>
 
                     <td className="py-4 px-4 font-mono font-bold text-gray-600">
-                      {conn.dbType === 'sqlite' ? 'local_drive_ref' : `${conn.dbHost}:${conn.dbPort}`}
+                      {conn.sourceType === 'sqlite' ? 'local_drive_ref' :
+                       conn.sourceType === 'active-directory' ? (conn.domain || conn.dbHost || 'N/A') :
+                       isApiBased(conn.sourceType) ? (conn.apiUrl || conn.dbHost || 'N/A') :
+                       `${conn.dbHost}:${conn.dbPort}`}
                     </td>
 
                     <td className="py-4 px-4 font-mono font-bold text-gray-700">
-                      {conn.dbName}
+                      {conn.sourceType === 'active-directory' ? (conn.baseDn || 'N/A') :
+                       conn.sourceType === 'sqlite' ? 'file://local' :
+                       isApiBased(conn.sourceType) ? conn.apiPlatform || 'N/A' :
+                       conn.dbName}
                     </td>
 
                     <td className="py-4 px-4 font-mono text-gray-500">
-                      {conn.dbUser || 'N/A'}
+                      {conn.sourceType === 'active-directory' ? (conn.dbUser || conn.domain || 'N/A') :
+                       isApiBased(conn.sourceType) ? (conn.apiKey ? '••••••••' : 'N/A') :
+                       conn.dbUser || 'N/A'}
                     </td>
 
                     <td className="py-4 px-4">
@@ -1200,7 +1258,7 @@ const ConnectivityTest: React.FC = () => {
                   <option value="sis-production">Jericho SIS Production (Default Postgres Bridge)</option>
                   {connections.map(c => (
                     <option key={c.id} value={c.id}>
-                      {c.name} ({c.dbType.toUpperCase()} on {c.dbHost})
+                      {c.name} ({c.sourceType.toUpperCase()} on {c.dbHost || c.domain || c.apiUrl || 'N/A'})
                     </option>
                   ))}
                 </select>
@@ -1302,7 +1360,7 @@ const ConnectivityTest: React.FC = () => {
               <div className="flex items-center gap-2.5">
                 <Sliders size={18} className="text-indigo-400" />
                 <h3 className="font-extrabold text-sm md:text-base tracking-tight">
-                  {formMode === 'edit' ? 'Edit Connection Endpoint Spec' : 'Configure New Relational Endpoint'}
+                  {formMode === 'edit' ? 'Edit Source Connection' : 'Configure New Source Connection'}
                 </h3>
               </div>
               <button 
@@ -1324,131 +1382,287 @@ const ConnectivityTest: React.FC = () => {
                   required
                   value={connName}
                   onChange={(e) => setConnName(e.target.value)}
-                  placeholder="e.g. Jericho Registrar Replica or Admissions Backup Feed"
+                  placeholder="e.g. Jericho AD Prod, Canvas API, or Banner DB"
                   className="w-full text-xs font-semibold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors"
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-gray-750 block">Database Server Dialect</label>
-                  <select
-                    value={dbType}
-                    onChange={(e) => handleDbTypeChange(e.target.value)}
-                    className="w-full text-xs font-semibold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-indigo-600 border-gray-150 transition-colors"
-                  >
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-gray-750 block">Source Type</label>
+                <select
+                  value={dbType}
+                  onChange={(e) => handleDbTypeChange(e.target.value)}
+                  className="w-full text-xs font-semibold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-indigo-600 border-gray-150 transition-colors"
+                >
+                  <optgroup label="Relational Databases (RDBMS)">
                     <option value="postgresql">PostgreSQL</option>
                     <option value="mysql">MySQL Server</option>
                     <option value="sqlite">SQLite (Embedded)</option>
                     <option value="oracle">Oracle Database</option>
                     <option value="sqlserver">Microsoft SQL Server</option>
-                  </select>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-gray-750 block">SSL Enforce Protocol</label>
-                  <select
-                    value={dbSslMode}
-                    onChange={(e) => setDbSslMode(e.target.value)}
-                    disabled={dbType === 'sqlite'}
-                    className="w-full text-xs font-semibold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-indigo-600 border-gray-150 transition-colors disabled:opacity-40"
-                  >
-                    <option value="require">Require SSL (Encrypted)</option>
-                    <option value="prefer">Prefer SSL (Opportunistic)</option>
-                    <option value="disable">Disable SSL (Cleartext Insecure)</option>
-                  </select>
-                </div>
+                  </optgroup>
+                  <optgroup label="Directory Services">
+                    <option value="active-directory">Active Directory (LDAP)</option>
+                  </optgroup>
+                  <optgroup label="Learning Management Systems">
+                    <option value="canvas">Canvas LMS</option>
+                    <option value="blackboard">Blackboard Learn</option>
+                    <option value="moodle">Moodle</option>
+                  </optgroup>
+                  <optgroup label="Higher Education Platforms">
+                    <option value="banner">Banner by Ellucian</option>
+                    <option value="ellucian">Ellucian Colleague</option>
+                    <option value="custom-api">Custom REST API</option>
+                  </optgroup>
+                </select>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="md:col-span-2 space-y-1.5">
-                  <label className="text-xs font-bold text-gray-750 block">Database Host / Server IP</label>
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 select-none">
-                      <Wifi size={13} />
-                    </span>
-                    <input
-                      type="text"
-                      required
+              {/* SSL — shown for RDBMS and AD */}
+              {(isRdbms(dbType) || dbType === 'active-directory') && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-750 block">
+                      {dbType === 'active-directory' ? 'LDAP Encryption' : 'SSL Enforce Protocol'}
+                    </label>
+                    <select
+                      value={dbSslMode}
+                      onChange={(e) => setDbSslMode(e.target.value)}
                       disabled={dbType === 'sqlite'}
-                      value={dbType === 'sqlite' ? 'local_drive' : dbHost}
-                      onChange={(e) => setDbHost(e.target.value)}
-                      placeholder="e.g. 192.168.12.80 or rdbms.jericho.edu"
-                      className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl pl-8 pr-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors disabled:opacity-50"
-                    />
+                      className="w-full text-xs font-semibold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-indigo-600 border-gray-150 transition-colors disabled:opacity-40"
+                    >
+                      <option value="require">Require SSL/TLS (Encrypted)</option>
+                      <option value="prefer">Prefer SSL (Opportunistic)</option>
+                      <option value="disable">Disable SSL (Cleartext)</option>
+                    </select>
                   </div>
                 </div>
+              )}
 
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-gray-750 block">TCP Port Binding</label>
-                  <input
-                    type="text"
-                    required
-                    disabled={dbType === 'sqlite'}
-                    value={dbType === 'sqlite' ? 'N/A' : dbPort}
-                    onChange={(e) => setDbPort(e.target.value)}
-                    placeholder="e.g. 5432"
-                    className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors disabled:opacity-50"
-                  />
-                </div>
-              </div>
+              {/* RDBMS fields: Host, Port, DB Name, User, Password */}
+              {isRdbms(dbType) && (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="md:col-span-2 space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">Database Host / Server IP</label>
+                      <div className="relative">
+                        <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 select-none">
+                          <Wifi size={13} />
+                        </span>
+                        <input
+                          type="text"
+                          required
+                          disabled={dbType === 'sqlite'}
+                          value={dbType === 'sqlite' ? 'local_drive' : dbHost}
+                          onChange={(e) => setDbHost(e.target.value)}
+                          placeholder="e.g. 192.168.12.80 or rdbms.jericho.edu"
+                          className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl pl-8 pr-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors disabled:opacity-50"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">TCP Port Binding</label>
+                      <input
+                        type="text"
+                        required
+                        disabled={dbType === 'sqlite'}
+                        value={dbType === 'sqlite' ? 'N/A' : dbPort}
+                        onChange={(e) => setDbPort(e.target.value)}
+                        placeholder="e.g. 5432"
+                        className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors disabled:opacity-50"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">Database Catalog Name</label>
+                      <input
+                        type="text"
+                        required
+                        value={dbName}
+                        onChange={(e) => setDbName(e.target.value)}
+                        placeholder="e.g. staging_balances"
+                        className="w-full text-xs font-semibold bg-gray-50 border border-gray-200 text-slate-850 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">Database Username</label>
+                      <input
+                        type="text"
+                        required
+                        disabled={dbType === 'sqlite'}
+                        value={dbType === 'sqlite' ? 'N/A' : dbUser}
+                        onChange={(e) => setDbUser(e.target.value)}
+                        placeholder="e.g. root"
+                        className="w-full text-xs font-semibold bg-gray-50 border border-gray-200 text-slate-855 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors disabled:opacity-50"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs font-bold text-gray-750 block">Database Access Password</label>
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="text-[10px] text-indigo-600 font-extrabold uppercase hover:underline"
+                      >
+                        {showPassword ? 'Hide Key' : 'Reveal Key'}
+                      </button>
+                    </div>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      disabled={dbType === 'sqlite'}
+                      value={dbType === 'sqlite' ? 'N/A' : dbPass}
+                      onChange={(e) => setDbPass(e.target.value)}
+                      placeholder="e.g. password"
+                      className="w-full text-xs bg-gray-50 border border-gray-200 text-slate-855 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors disabled:opacity-50"
+                    />
+                  </div>
+                </>
+              )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-gray-750 block">Database Catalog Name</label>
-                  <input
-                    type="text"
-                    required
-                    value={dbName}
-                    onChange={(e) => setDbName(e.target.value)}
-                    placeholder="e.g. staging_balances"
-                    className="w-full text-xs font-semibold bg-gray-50 border border-gray-200 text-slate-850 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors"
-                  />
-                </div>
+              {/* Active Directory fields */}
+              {dbType === 'active-directory' && (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">Domain / Server</label>
+                      <div className="relative">
+                        <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 select-none">
+                          <Wifi size={13} />
+                        </span>
+                        <input
+                          type="text"
+                          required
+                          value={domain}
+                          onChange={(e) => setDomain(e.target.value)}
+                          placeholder="e.g. ad.benedict.edu"
+                          className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl pl-8 pr-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">LDAP Port</label>
+                      <input
+                        type="text"
+                        required
+                        value={dbPort}
+                        onChange={(e) => setDbPort(e.target.value)}
+                        placeholder="389, 636, or 3268"
+                        className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-750 block">Base DN (Distinguished Name)</label>
+                    <input
+                      type="text"
+                      value={baseDn}
+                      onChange={(e) => setBaseDn(e.target.value)}
+                      placeholder="e.g. DC=benedict,DC=edu (leave empty for rootDSE)"
+                      className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">Bind Username</label>
+                      <input
+                        type="text"
+                        required
+                        value={dbUser}
+                        onChange={(e) => setDbUser(e.target.value)}
+                        placeholder="e.g. john.doe@benedict.edu"
+                        className="w-full text-xs font-semibold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <label className="text-xs font-bold text-gray-750 block">Bind Password</label>
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="text-[10px] text-indigo-600 font-extrabold uppercase hover:underline"
+                        >
+                          {showPassword ? 'Hide' : 'Reveal'}
+                        </button>
+                      </div>
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        value={dbPass}
+                        onChange={(e) => setDbPass(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full text-xs bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
 
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-gray-750 block">Database Username</label>
-                  <input
-                    type="text"
-                    required
-                    disabled={dbType === 'sqlite'}
-                    value={dbType === 'sqlite' ? 'N/A' : dbUser}
-                    onChange={(e) => setDbUser(e.target.value)}
-                    placeholder="e.g. root"
-                    className="w-full text-xs font-semibold bg-gray-50 border border-gray-200 text-slate-855 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors disabled:opacity-50"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center">
-                  <label className="text-xs font-bold text-gray-750 block">Database Access Password</label>
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="text-[10px] text-indigo-600 font-extrabold uppercase hover:underline"
-                  >
-                    {showPassword ? 'Hide Key' : 'Reveal Key'}
-                  </button>
-                </div>
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  disabled={dbType === 'sqlite'}
-                  value={dbType === 'sqlite' ? 'N/A' : dbPass}
-                  onChange={(e) => setDbPass(e.target.value)}
-                  placeholder="e.g. password"
-                  className="w-full text-xs bg-gray-50 border border-gray-200 text-slate-855 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors disabled:opacity-50"
-                />
-              </div>
-
-              {/* Informative advice message */}
-              <div className="p-3.5 bg-indigo-50/40 border border-indigo-100 rounded-2xl flex items-start gap-2.5 text-[11px] text-indigo-950 mt-1.5">
-                <Info size={15} className="text-indigo-600 shrink-0 mt-0.5" />
-                <p className="leading-snug">
-                  Note: Testing connections with IP address ending with <strong>192.168.4.22</strong> or strings containing "fail" will simulate logical TCP timeouts and auth refusal errors for platform error simulation.
-                </p>
-              </div>
+              {/* API-based fields (Canvas, Blackboard, Moodle, Banner, Ellucian, Custom) */}
+              {isApiBased(dbType) && (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">API Base URL</label>
+                      <div className="relative">
+                        <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 select-none">
+                          <Wifi size={13} />
+                        </span>
+                        <input
+                          type="text"
+                          required
+                          value={apiUrl}
+                          onChange={(e) => setApiUrl(e.target.value)}
+                          placeholder="e.g. https://benedict.instructure.com"
+                          className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl pl-8 pr-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">Platform</label>
+                      <input
+                        type="text"
+                        disabled
+                        value={
+                          dbType === 'canvas' ? 'Canvas LMS' :
+                          dbType === 'blackboard' ? 'Blackboard Learn' :
+                          dbType === 'moodle' ? 'Moodle' :
+                          dbType === 'banner' ? 'Banner by Ellucian' :
+                          dbType === 'ellucian' ? 'Ellucian Colleague' :
+                          'Custom REST API'
+                        }
+                        className="w-full text-xs font-semibold bg-gray-100 border border-gray-200 text-slate-500 rounded-xl px-3 py-2.5 outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-750 block">
+                      {dbType === 'canvas' ? 'Access Token' :
+                       dbType === 'blackboard' ? 'Application Key' :
+                       dbType === 'moodle' ? 'Web Service Token' :
+                       'API Key / Token'}
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        placeholder="••••••••••••••••"
+                        className="w-full text-xs bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 border-gray-150 transition-colors"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-indigo-600 font-extrabold uppercase hover:underline"
+                      >
+                        {showPassword ? 'Hide' : 'Reveal'}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* Modal controls */}
               <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-gray-100">
@@ -1482,7 +1696,7 @@ const ConnectivityTest: React.FC = () => {
               <div className="flex items-center gap-2">
                 <div className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-ping"></div>
                 <h3 className="font-extrabold text-xs uppercase tracking-wider">
-                  RDBMS Telemetry Handshake verifier
+                  Connection Telemetry Handshake Verifier
                 </h3>
               </div>
               <button
