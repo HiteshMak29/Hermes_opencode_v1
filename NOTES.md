@@ -189,8 +189,44 @@ ConnectivityTest → localStorage (juc_rdbms_connections + juc_card_sql_queries)
   → For each binding, resolves connection by ID
   → POST /api/sis/staging/execute-card-query { connection, sqlQuery }
      ├─ connection=null or id='sis-production' → simulated data
-     └─ connection with real dbType (postgresql/mssql) → live DB query
+     └─ connection with real dbType → gateway routes to microservice
 ```
+
+## Microservice Connectivity Architecture
+
+The backend uses a **service-oriented microarchitecture** where each source type is handled by an independent, self-contained service module:
+
+```
+services/
+  types.ts        — Shared interfaces (ConnectionParams, SourceService, etc.)
+  registry.ts     — Maps source type → service module
+  gateway.ts      — API gateway: routes testConnection / executeQuery to the right service
+  rdbms.ts        — PostgreSQL & MSSQL (test + query execution)
+  directory.ts    — Active Directory / LDAP (test only)
+  messaging.ts    — SMTP Email Server (test only)
+  transfer.ts     — SFTP Server (test only)
+  storage.ts      — Local File System (test only)
+  api.ts          — Canvas, Blackboard, Moodle, Banner, Ellucian, Custom API (test only)
+```
+
+Each service implements the `SourceService` interface:
+
+```typescript
+interface SourceService {
+  type: string | string[];
+  testConnection(params): Promise<TestResult>;
+  executeQuery?(connection, sqlQuery): Promise<QueryResult>;  // RDBMS only
+}
+```
+
+**Key principles:**
+- One microservice per source type (or family, e.g. RDBMS handles postgresql + sqlserver)
+- Services register themselves in `registry.ts` at import time
+- `gateway.ts` dispatches `testConnection` and `executeQuery` calls to the correct service
+- Adding a new source type = create a new service module + register it — no changes to server.ts
+- All existing frontend code, localStorage connections, and SQL bindings preserved unchanged
+
+**Supported source types:** postgresql, mysql, sqlite, oracle, sqlserver, active-directory, smtp, sftp, local-files, canvas, blackboard, moodle, banner, ellucian, custom-api
 
 ## To make cards show real data
 1. In Source Connectivity, add an RDBMS connection (PostgreSQL/MSSQL) with real host/port/credentials
