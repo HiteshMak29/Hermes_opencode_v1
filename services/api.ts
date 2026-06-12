@@ -1,4 +1,5 @@
 import type { SourceService, ConnectionParams, TestResult } from './types.ts';
+import { logger } from './logger.ts';
 
 export const apiService: SourceService = {
   type: ['canvas', 'blackboard', 'moodle', 'banner', 'ellucian', 'custom-api'],
@@ -20,13 +21,18 @@ export const apiService: SourceService = {
         signal: controller.signal,
       });
       clearTimeout(timeout);
+      const dur = Date.now() - startTime;
       if (response.ok || response.status < 500) {
-        return { success: true, latency: Date.now() - startTime, statusCode: response.status };
+        logger.logConnectionTest('api', 'success', dur, { metadata: { url: apiUrl, statusCode: response.status } });
+        return { success: true, latency: dur, statusCode: response.status };
       } else {
-        return { success: false, error: `API returned status ${response.status}`, latency: Date.now() - startTime };
+        logger.logConnectionTest('api', 'failure', dur, { error: `API returned status ${response.status}`, metadata: { url: apiUrl, statusCode: response.status } });
+        return { success: false, error: `API returned status ${response.status}`, latency: dur };
       }
     } catch (error: any) {
-      return { success: false, error: `API request failed: ${error.message}`, latency: Date.now() - startTime };
+      const dur = Date.now() - startTime;
+      logger.logConnectionTest('api', 'failure', dur, { error: error.message, metadata: { url: apiUrl } });
+      return { success: false, error: `API request failed: ${error.message}`, latency: dur };
     }
   }
 };

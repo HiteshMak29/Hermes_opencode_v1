@@ -2,6 +2,7 @@ import pg from "pg";
 import mssql from "mssql";
 import type { SourceService, ConnectionParams, TestResult, QueryResult } from './types.ts';
 import { resolveType } from './types.ts';
+import { logger } from './logger.ts';
 
 export const rdbmsService: SourceService = {
   type: ['postgresql', 'postgres', 'sqlserver', 'mssql', 'mysql', 'oracle', 'sqlite'],
@@ -29,9 +30,13 @@ export const rdbmsService: SourceService = {
         const pool = await mssql.connect(config);
         await pool.request().query('SELECT 1');
         await pool.close();
-        return { success: true, latency: Date.now() - startTime };
+        const dur = Date.now() - startTime;
+        logger.logConnectionTest(actualType, 'success', dur, { metadata: { dbHost, dbPort, dbName } });
+        return { success: true, latency: dur };
       } catch (error: any) {
-        return { success: false, error: error.message, latency: Date.now() - startTime };
+        const dur = Date.now() - startTime;
+        logger.logConnectionTest(actualType, 'failure', dur, { error: error.message, metadata: { dbHost, dbPort, dbName } });
+        return { success: false, error: error.message, latency: dur };
       }
     }
 
@@ -52,18 +57,25 @@ export const rdbmsService: SourceService = {
         await client.connect();
         await client.query('SELECT 1');
         await client.end();
-        return { success: true, latency: Date.now() - startTime };
+        const dur = Date.now() - startTime;
+        logger.logConnectionTest(actualType, 'success', dur, { metadata: { dbHost, dbPort, dbName } });
+        return { success: true, latency: dur };
       } catch (error: any) {
-        return { success: false, error: error.message, latency: Date.now() - startTime };
+        const dur = Date.now() - startTime;
+        logger.logConnectionTest(actualType, 'failure', dur, { error: error.message, metadata: { dbHost, dbPort, dbName } });
+        return { success: false, error: error.message, latency: dur };
       }
     }
 
+    const dur = Date.now() - startTime;
+    logger.warn('rdbms', 'test-connection', `Unsupported RDBMS type: ${actualType}`);
     return { success: false, error: `RDBMS type '${actualType}' not implemented for testing` };
   },
 
   async executeQuery(connection: ConnectionParams, sqlQuery: string): Promise<QueryResult> {
     const { dbHost, dbPort, dbName, dbUser, dbPass, dbSslMode } = connection;
     const dbType = connection.dbType || 'postgresql';
+    const startTime = Date.now();
 
     let processedQuery = sqlQuery;
     processedQuery = processedQuery.replace(/@StudentId/gi, "'1028617'");
@@ -87,13 +99,16 @@ export const rdbmsService: SourceService = {
         const pool = await mssql.connect(config);
         const result = await pool.request().query(processedQuery);
         await pool.close();
+        const dur = Date.now() - startTime;
+        logger.logQueryExecution(dbType, 'success', dur, { sql: sqlQuery, metadata: { dbHost, rowCount: result.recordset?.length } });
         return {
           success: true,
           rows: result.recordset,
           columns: result.recordset && result.recordset.length > 0 ? Object.keys(result.recordset[0]) : []
         };
       } catch (error: any) {
-        console.warn("MSSQL connection/query failed:", error.message);
+        const dur = Date.now() - startTime;
+        logger.logQueryExecution(dbType, 'failure', dur, { error: error.message, sql: sqlQuery });
         return {
           success: false,
           error: error.message || "Failed to query MSSQL Server backend",
@@ -128,10 +143,12 @@ export const rdbmsService: SourceService = {
           });
           return obj;
         });
-
+        const dur = Date.now() - startTime;
+        logger.logQueryExecution(dbType, 'success', dur, { sql: sqlQuery, metadata: { dbHost, rowCount: rows.length } });
         return { success: true, rows, columns: cols };
       } catch (error: any) {
-        console.warn("PostgreSQL connection/query failed:", error.message);
+        const dur = Date.now() - startTime;
+        logger.logQueryExecution(dbType, 'failure', dur, { error: error.message, sql: sqlQuery });
         return {
           success: false,
           error: error.message || "Failed to query PostgreSQL backend",
@@ -140,6 +157,8 @@ export const rdbmsService: SourceService = {
       }
     }
 
+    const dur = Date.now() - startTime;
+    logger.warn('rdbms', 'execute-query', `Unsupported RDBMS type for query: ${dbType}`);
     return {
       success: false,
       error: `Database platform '${dbType}' is not currently configured for executing card telemetry.`

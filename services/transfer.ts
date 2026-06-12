@@ -1,4 +1,5 @@
 import type { SourceService, ConnectionParams, TestResult } from './types.ts';
+import { logger } from './logger.ts';
 
 export const transferService: SourceService = {
   type: 'sftp',
@@ -18,11 +19,15 @@ export const transferService: SourceService = {
         readyTimeout: 10000,
       });
       const targetPath = basePath || '/';
-      await client.list(targetPath);
+      const list = await client.list(targetPath);
       await client.end();
-      return { success: true, latency: Date.now() - startTime };
+      const dur = Date.now() - startTime;
+      logger.logConnectionTest('sftp', 'success', dur, { metadata: { host: dbHost, port: dbPort, path: targetPath, entries: list.length } });
+      return { success: true, latency: dur };
     } catch (error: any) {
-      return { success: false, error: `SFTP connection failed: ${error.message}`, latency: Date.now() - startTime };
+      const dur = Date.now() - startTime;
+      logger.logConnectionTest('sftp', 'failure', dur, { error: error.message, metadata: { host: dbHost, port: dbPort } });
+      return { success: false, error: `SFTP connection failed: ${error.message}`, latency: dur };
     }
   }
 };

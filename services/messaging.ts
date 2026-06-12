@@ -1,4 +1,5 @@
 import type { SourceService, ConnectionParams, TestResult } from './types.ts';
+import { logger } from './logger.ts';
 
 export const messagingService: SourceService = {
   type: 'smtp',
@@ -18,9 +19,13 @@ export const messagingService: SourceService = {
         connectionTimeout: 5000,
       });
       await transporter.verify();
-      return { success: true, latency: Date.now() - startTime };
+      const dur = Date.now() - startTime;
+      logger.logConnectionTest('smtp', 'success', dur, { metadata: { host: dbHost, port: dbPort } });
+      return { success: true, latency: dur };
     } catch (error: any) {
-      return { success: false, error: `SMTP connection failed: ${error.message}`, latency: Date.now() - startTime };
+      const dur = Date.now() - startTime;
+      logger.logConnectionTest('smtp', 'failure', dur, { error: error.message, metadata: { host: dbHost, port: dbPort } });
+      return { success: false, error: `SMTP connection failed: ${error.message}`, latency: dur };
     }
   }
 };

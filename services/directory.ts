@@ -1,4 +1,5 @@
 import type { SourceService, ConnectionParams, TestResult } from './types.ts';
+import { logger } from './logger.ts';
 
 export const directoryService: SourceService = {
   type: 'active-directory',
@@ -23,9 +24,13 @@ export const directoryService: SourceService = {
           else resolve();
         });
       });
-      return { success: true, latency: Date.now() - startTime };
+      const dur = Date.now() - startTime;
+      logger.logConnectionTest('active-directory', 'success', dur, { metadata: { domain: domain || dbHost, baseDn } });
+      return { success: true, latency: dur };
     } catch (error: any) {
-      return { success: false, error: `LDAP connection failed: ${error.message}`, latency: Date.now() - startTime };
+      const dur = Date.now() - startTime;
+      logger.logConnectionTest('active-directory', 'failure', dur, { error: error.message, metadata: { domain: domain || dbHost } });
+      return { success: false, error: `LDAP connection failed: ${error.message}`, latency: dur };
     }
   }
 };

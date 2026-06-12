@@ -3,6 +3,7 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import { testConnection, executeQuery } from "./services/gateway.ts";
+import { logger } from "./services/logger.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -11,21 +12,64 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Middleware for parsing JSON
   app.use(express.json());
 
-  // --- API ROUTES FOR SIS, LMS, AND CRM ---
-  
-  // SIS (Student Information System) Dedicated Microservice & Staging DB APIs
-  
-  // Card 1: Student Profile Header Widget
-  // SQL Query: SELECT student_id, first_name, last_name, major, minor, year, current_gpa, total_credits, program FROM staging_students WHERE student_id = ?;
+  // ── Request logging middleware ──
+  app.use((req, res, next) => {
+    const start = Date.now();
+    const originalJson = res.json.bind(res);
+    res.json = function (body: any) {
+      const dur = Date.now() - start;
+      const status = res.statusCode < 400 ? 'success' : 'failure';
+      logger.info('http', `${req.method} ${req.path}`, `${req.method} ${req.path} → ${res.statusCode} in ${dur}ms`, {
+        status,
+        duration: dur,
+        metadata: {
+          method: req.method,
+          path: req.path,
+          statusCode: res.statusCode,
+          query: req.query,
+        },
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
+      return originalJson(body);
+    };
+    next();
+  });
+
+  // ── Log API endpoints (for Grafana / native dashboard) ──
+
+  app.get("/api/logs/recent", (req, res) => {
+    const limit = parseInt(req.query.limit as string) || 200;
+    const entries = logger.recent(limit);
+    res.json({ success: true, count: entries.length, entries });
+  });
+
+  app.get("/api/logs/stats", (req, res) => {
+    const stats = logger.stats();
+    res.json({ success: true, ...stats });
+  });
+
+  app.get("/api/logs/search", (req, res) => {
+    const { modules, levels, status, from, to, limit } = req.query as Record<string, string>;
+    const entries = logger.search({
+      modules: modules ? modules.split(',') : undefined,
+      levels: levels ? levels.split(',') as any : undefined,
+      status: status as any,
+      from,
+      to,
+      limit: limit ? parseInt(limit) : undefined,
+    });
+    res.json({ success: true, count: entries.length, entries });
+  });
+
+  // ── SIS Staging API Routes ──
+
   app.get("/api/sis/staging/profile/:id", async (req, res) => {
     const { id } = req.params;
     try {
-      // In a production setup, you would query the staging database:
-      // const [student] = await db.execute("SELECT student_id, name, major, minor, current_gpa, total_credits, year FROM staging_students WHERE student_id = ?", [id]);
-      
+      logger.info('sis', 'profile-fetch', `Profile fetch for student ${id}`);
       res.json({
         success: true,
         source: "SIS_Staging_Database",
@@ -43,18 +87,15 @@ async function startServer() {
         }
       });
     } catch (error) {
+      logger.error('sis', 'profile-fetch', `Profile fetch failed for ${id}`, { error: { message: (error as Error).message } });
       res.status(500).json({ success: false, error: "Database query failed for profile card" });
     }
   });
 
-  // Card 2: Tuition & Outstanding Balances Alert Widget
-  // SQL Query: SELECT student_id, total_outstanding, last_payment, hold_flag FROM staging_tuition_balances WHERE student_id = ?;
   app.get("/api/sis/staging/finances/:id", async (req, res) => {
     const { id } = req.params;
     try {
-      // Production Staging Query:
-      // const [balance] = await db.execute("SELECT student_id, outstanding_balance, hold_flag FROM staging_tuition_balances WHERE student_id = ?", [id]);
-      
+      logger.info('sis', 'finances-fetch', `Finances fetch for student ${id}`);
       res.json({
         success: true,
         source: "SIS_Staging_Database",
@@ -73,19 +114,15 @@ async function startServer() {
         }
       });
     } catch (error) {
+      logger.error('sis', 'finances-fetch', `Finances fetch failed for ${id}`, { error: { message: (error as Error).message } });
       res.status(500).json({ success: false, error: "Database query failed for finance card" });
     }
   });
 
-  // Card 3: Semester Registered Courses List Widget
-  // SQL Query: SELECT course_code, course_name, credits, grade, attendance, status FROM staging_enrolled_courses WHERE student_id = ? AND semester_id = ?;
   app.get("/api/sis/staging/courses/:id", async (req, res) => {
     const { id } = req.params;
-    const term = req.query.term || "f24";
     try {
-      // Production Staging Query:
-      // const courses = await db.execute("SELECT course_code, course_name, credits, attendance, status FROM staging_enrolled_courses WHERE student_id = ? AND semester_id = ?", [id, term]);
-      
+      logger.info('sis', 'courses-fetch', `Courses fetch for student ${id}, term ${req.query.term}`);
       res.json({
         success: true,
         source: "SIS_Staging_Database",
@@ -97,18 +134,15 @@ async function startServer() {
         ]
       });
     } catch (error) {
+      logger.error('sis', 'courses-fetch', `Courses fetch failed for ${id}`, { error: { message: (error as Error).message } });
       res.status(500).json({ success: false, error: "Database query failed for course roster card" });
     }
   });
 
-  // Card 4: Health & Medical Immunization Compliance Card
-  // SQL Query: SELECT requirement_id, req_name, status, due_date FROM staging_medical_requirements WHERE student_id = ?;
   app.get("/api/sis/staging/medical/:id", async (req, res) => {
     const { id } = req.params;
     try {
-      // Production Staging Query:
-      // const records = await db.execute("SELECT req_name, status, due_date FROM staging_medical_requirements WHERE student_id = ?", [id]);
-      
+      logger.info('sis', 'medical-fetch', `Medical fetch for student ${id}`);
       res.json({
         success: true,
         source: "SIS_Staging_Database",
@@ -121,6 +155,7 @@ async function startServer() {
         ]
       });
     } catch (error) {
+      logger.error('sis', 'medical-fetch', `Medical fetch failed for ${id}`, { error: { message: (error as Error).message } });
       res.status(500).json({ success: false, error: "Database query failed for health compliance card" });
     }
   });
@@ -128,9 +163,13 @@ async function startServer() {
   // Staging SQL Sandbox endpoint
   app.post("/api/sis/staging/execute-sql", async (req, res) => {
     const { query } = req.body;
-    if (!query) return res.status(400).json({ error: "Query statement is required" });
+    if (!query) {
+      logger.warn('sandbox', 'execute-sql', 'Missing query parameter');
+      return res.status(400).json({ error: "Query statement is required" });
+    }
 
-    // Parse SELECT columns, splitting by comma only at the top level
+    const startTime = Date.now();
+
     const selectMatch = query.match(/SELECT\s+(.*?)\s+FROM\s/is);
     const rawColumns = selectMatch ? selectMatch[1].trim() : query;
 
@@ -167,7 +206,6 @@ async function startServer() {
       }
     }
 
-    // Generate mock rows based on column names
     const generateValue = (col: string, rowIndex: number) => {
       const lower = col.toLowerCase();
       if (lower.includes("gpa") || lower.includes("score") || lower.includes("average")) return (3.2 + rowIndex * 0.3 + Math.random() * 0.5).toFixed(2);
@@ -193,17 +231,26 @@ async function startServer() {
       columns.map((col) => generateValue(col, i))
     );
 
-    return res.json({ columns, rows, execTimeMs: Math.floor(Math.random() * 20) + 5 });
+    const dur = Date.now() - startTime;
+    logger.info('sandbox', 'execute-sql', `SQL sandbox executed in ${dur}ms`, {
+      status: 'success',
+      duration: dur,
+      metadata: { columns, rowCount },
+    });
+
+    return res.json({ columns, rows, execTimeMs: dur });
   });
 
   // Live Active Card SQL Executor Bridge (real DB connections via gateway)
   app.post("/api/sis/staging/execute-card-query", async (req, res) => {
     const { connection, sqlQuery } = req.body;
     if (!sqlQuery) {
+      logger.warn('database', 'execute-card-query', 'Missing SQL query parameter');
       return res.status(400).json({ success: false, error: "SQL query statement is required." });
     }
 
     if (!connection || connection.id === 'sis-production') {
+      const startTime = Date.now();
       const upperQuery = sqlQuery.toUpperCase();
       let columns: string[] = [];
       let rows: any[] = [];
@@ -265,15 +312,16 @@ async function startServer() {
         rows = [{ status: "Simulation Sandbox Active", queries_run: 1, server_local_time: new Date().toLocaleTimeString() }];
       }
 
-      return res.json({
-        success: true,
-        simulated: true,
-        rows,
-        columns
+      const dur = Date.now() - startTime;
+      logger.info('database', 'execute-card-query', `Simulated query executed in ${dur}ms`, {
+        status: 'success',
+        duration: dur,
+        metadata: { simulated: true, rowCount: rows.length, columns },
       });
+
+      return res.json({ success: true, simulated: true, rows, columns });
     }
 
-    // Route to the appropriate microservice via gateway
     const result = await executeQuery(connection, sqlQuery);
     return res.json(result);
   });
@@ -284,7 +332,7 @@ async function startServer() {
     return res.json(result);
   });
 
-  // --- VITE MIDDLEWARE ---
+  // ── VITE MIDDLEWARE ──
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -300,6 +348,7 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
+    logger.logSystemEvent('server-start', `Server running on http://localhost:${PORT}`);
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }

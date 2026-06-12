@@ -1,4 +1,5 @@
 import type { SourceService, ConnectionParams, TestResult } from './types.ts';
+import { logger } from './logger.ts';
 
 export const storageService: SourceService = {
   type: 'local-files',
@@ -13,9 +14,13 @@ export const storageService: SourceService = {
       await fs.access(targetPath);
       const stat = await fs.stat(targetPath);
       if (!stat.isDirectory()) throw new Error('Path is not a directory');
-      return { success: true, latency: Date.now() - startTime };
+      const dur = Date.now() - startTime;
+      logger.logConnectionTest('local-files', 'success', dur, { metadata: { path: targetPath } });
+      return { success: true, latency: dur };
     } catch (error: any) {
-      return { success: false, error: `Local file system access failed: ${error.message}`, latency: Date.now() - startTime };
+      const dur = Date.now() - startTime;
+      logger.logConnectionTest('local-files', 'failure', dur, { error: error.message, metadata: { path: basePath || '.' } });
+      return { success: false, error: `Local file system access failed: ${error.message}`, latency: dur };
     }
   }
 };

@@ -228,6 +228,100 @@ interface SourceService {
 
 **Supported source types:** postgresql, mysql, sqlite, oracle, sqlserver, active-directory, smtp, sftp, local-files, canvas, blackboard, moodle, banner, ellucian, custom-api
 
+## Structured Logging & Application Monitoring
+
+The system has a comprehensive structured logging framework designed for Grafana or a native dashboard.
+
+### Architecture
+
+```
+services/
+  logger.ts       — Core logger: rotating JSONL files + in-memory ring buffer (2000 entries)
+```
+
+### Log Schema (Grafana-compatible JSON)
+
+Each log entry is written as a JSON line to `logs/app-YYYY-MM-DD.log`:
+
+```json
+{
+  "timestamp": "2026-06-12T04:30:00.000Z",
+  "level": "info|warn|error|debug",
+  "module": "connectivity|database|auth|gateway|http|sis|system|module-access",
+  "action": "test-connection|execute-query|login|route|etc.",
+  "message": "Human-readable description",
+  "status": "success|failure|pending",
+  "duration": 123,
+  "session": "session-id",
+  "userId": "user-id",
+  "ip": "client-ip",
+  "userAgent": "user-agent-string",
+  "metadata": { /* flexible context */ },
+  "error": { "message": "...", "code": "DB_ERROR", "stack": "..." }
+}
+```
+
+### What Is Logged
+
+| Category | Events | Module |
+|---|---|---|
+| **Connectivity** | All test-connection attempts (per source type), latency, success/failure | `connectivity` |
+| **Database Queries** | Every execute-card-query, SQL preview, row count, latency, errors | `database` |
+| **Microservice Routing** | Gateway dispatch decisions, service resolution | `gateway` |
+| **HTTP API** | Every request: method, path, status code, duration, client IP | `http` |
+| **SIS Data** | Profile, finances, courses, medical fetches | `sis` |
+| **SQL Sandbox** | Ad-hoc SQL execution, column counts | `sandbox` |
+| **System Events** | Server start, gateway init | `system` |
+| **Auth Events** | Login, logout, session events (via `logAuthEvent`) | `auth` |
+| **Module Access** | Per-user per-session module access tracking (via `logModuleAccess`) | `module-access` |
+
+### API Endpoints (for Grafana / dashboard consumption)
+
+```
+GET /api/logs/recent?limit=200     — Last N log entries from memory buffer
+GET /api/logs/stats                — Aggregated stats: counts by level/module/status,
+                                     failure rate, avg latency, throughput/min, top errors
+GET /api/logs/search?modules=...   — Filtered search with query params:
+  &levels=info,warn,error            modules (comma-separated)
+  &status=failure                    levels (comma-separated)
+  &from=2026-06-12T00:00:00Z        status filter
+  &to=2026-06-12T23:59:59Z          time range
+  &limit=100                         max results
+```
+
+### Stats Response Shape
+
+```json
+{
+  "total": 1500,
+  "byLevel": { "info": 1200, "warn": 200, "error": 100 },
+  "byModule": { "connectivity": 300, "database": 500, "http": 600, ... },
+  "byStatus": { "success": 1300, "failure": 200 },
+  "failureRate": 13.33,
+  "avgDuration": 42,
+  "topErrors": [
+    { "module": "connectivity", "action": "test-connection", "count": 45 }
+  ],
+  "throughput": [
+    { "timestamp": "04:20", "count": 15 },
+    { "timestamp": "04:21", "count": 22 }
+  ]
+}
+```
+
+### Log File Rotation
+
+- Written to `logs/app-YYYY-MM-DD.log` (one file per day)
+- In-memory ring buffer holds last 2000 entries for fast API queries
+- No external dependencies — uses built-in `fs.appendFile`
+
+### To Integrate with Grafana
+
+Point Grafana's JSON API data source to:
+- `http://localhost:3000/api/logs/recent` — raw log entries
+- `http://localhost:3000/api/logs/stats` — aggregated metrics
+- Or tail the JSONL files with Promtail → Loki → Grafana
+
 ## To make cards show real data
 1. In Source Connectivity, add an RDBMS connection (PostgreSQL/MSSQL) with real host/port/credentials
 2. Set each binding's `connectionId` to the new connection instead of `sis-production`
