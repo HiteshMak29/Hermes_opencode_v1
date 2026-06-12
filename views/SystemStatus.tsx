@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   CheckCircle2, 
   AlertCircle, 
@@ -14,7 +14,6 @@ import {
   ShieldCheck,
   TrendingDown
 } from 'lucide-react';
-import { SYSTEM_STATUS_MOCK, INCIDENTS_MOCK } from '../constants';
 import { motion, AnimatePresence } from 'motion/react';
 
 const SystemStatus: React.FC = () => {
@@ -22,6 +21,37 @@ const SystemStatus: React.FC = () => {
   const [subscriptionPhone, setSubscriptionPhone] = useState('');
   const [subType, setSubType] = useState<'email' | 'sms' | null>(null);
   const [subscribedMessage, setSubscribedMessage] = useState<string | null>(null);
+  const [services, setServices] = useState<any[]>([]);
+  const [incidents, setIncidents] = useState<any[]>([]);
+  const [healthy, setHealthy] = useState(true);
+  const [uptimePct, setUptimePct] = useState(99.8);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [svcRes, incRes] = await Promise.all([
+          fetch('/api/system/services'),
+          fetch('/api/system/incidents'),
+        ]);
+        if (svcRes.ok) {
+          const svcData = await svcRes.json();
+          setServices(svcData.services || []);
+          setHealthy(svcData.healthy !== false);
+          setUptimePct(svcData.uptimePct ?? 99.8);
+        }
+        if (incRes.ok) {
+          const incData = await incRes.json();
+          setIncidents(incData.incidents || []);
+        }
+      } catch {
+        // fallback — keep defaults
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -47,7 +77,6 @@ const SystemStatus: React.FC = () => {
     e.preventDefault();
     if (subType === 'email' && !subscriptionEmail) return;
     if (subType === 'sms' && !subscriptionPhone) return;
-
     const contact = subType === 'email' ? subscriptionEmail : subscriptionPhone;
     setSubscribedMessage(`Success! Registered ${contact} for automated incident notifications. Active tickets will dispatch realtime triggers.`);
     setSubscriptionEmail('');
@@ -68,15 +97,15 @@ const SystemStatus: React.FC = () => {
         </div>
 
         <div className="flex flex-col items-end gap-2 text-right relative z-10">
-          <div className="flex items-center space-x-2 px-4 py-2 bg-emerald-50 text-emerald-700 rounded-2xl border border-emerald-100 font-bold text-xs uppercase tracking-wider">
-            <CheckCircle2 size={16} />
-            <span>Operational Health: 99.8%</span>
+          <div className={`flex items-center space-x-2 px-4 py-2 rounded-2xl border font-bold text-xs uppercase tracking-wider ${healthy ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-100'}`}>
+            {healthy ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+            <span>Operational Health: {uptimePct.toFixed(1)}%</span>
           </div>
-          <span className="text-[10px] font-mono text-gray-400">All Core Systems Synchronized</span>
+          <span className="text-[10px] font-mono text-gray-400">{loading ? 'Loading...' : `${services.length} services monitored`}</span>
         </div>
       </header>
 
-      {/* Ticket Relief KPI Indicators — why student page reduces helpdesk tickets by 30-40% */}
+      {/* Ticket Relief KPI Indicators */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         
         <div className="bg-gradient-to-tr from-slate-900 to-indigo-950 text-white p-6 rounded-3xl border border-indigo-950 flex flex-col justify-between">
@@ -98,11 +127,11 @@ const SystemStatus: React.FC = () => {
             <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-2xl">
               <ShieldCheck size={22} />
             </div>
-            <span className="text-[9px] font-black uppercase text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">Diverted Logs</span>
+            <span className="text-[9px] font-black uppercase text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">{incidents.filter(i => i.status === 'Resolved').length} Resolved</span>
           </div>
           <div>
-            <p className="text-2xl font-black text-gray-900 font-mono">1,420</p>
-            <h4 className="text-xs font-bold text-gray-500 mt-1">Inbound Phone Deduplications (48h)</h4>
+            <p className="text-2xl font-black text-gray-900 font-mono">{incidents.length}</p>
+            <h4 className="text-xs font-bold text-gray-500 mt-1">Active & Recent Incidents</h4>
             <p className="text-[10px] text-gray-400 mt-2 font-medium">Self-declared status indicators direct students to existing fixes ahead of time.</p>
           </div>
         </div>
@@ -112,11 +141,11 @@ const SystemStatus: React.FC = () => {
             <div className="p-2.5 bg-purple-50 text-purple-600 rounded-2xl">
               <Bell size={22} />
             </div>
-            <span className="text-[9px] font-black uppercase text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">Active Subs</span>
+            <span className="text-[9px] font-black uppercase text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">Heat Map</span>
           </div>
           <div>
-            <p className="text-2xl font-black text-gray-900 font-mono">2,880</p>
-            <h4 className="text-xs font-bold text-gray-500 mt-1">Students Registered for Push Alerts</h4>
+            <p className="text-2xl font-black text-gray-900 font-mono">{services.filter(s => s.status === 'Operational').length}/{services.length}</p>
+            <h4 className="text-xs font-bold text-gray-500 mt-1">Services Fully Operational</h4>
             <p className="text-[10px] text-gray-400 mt-2 font-medium">Enabling direct telemetry notifications straight to mobile devices on failure.</p>
           </div>
         </div>
@@ -136,7 +165,7 @@ const SystemStatus: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {SYSTEM_STATUS_MOCK.map((system) => (
+              {services.map((system) => (
                 <div key={system.id} className="p-5 rounded-2xl border border-gray-50 bg-gray-50/20 space-y-4">
                   <div className="flex justify-between items-start">
                     <h4 className="font-extrabold text-xs text-gray-800">{system.name}</h4>
@@ -146,7 +175,7 @@ const SystemStatus: React.FC = () => {
                     </span>
                   </div>
                   <div className="flex justify-between text-[10px] text-gray-500 border-t border-gray-100 pt-2 font-semibold">
-                    <span>90-Day SLA average: <span className="text-gray-900 font-bold">{system.uptime}</span></span>
+                    <span>Latency: <span className="text-gray-900 font-bold">{system.latency || system.uptime}</span></span>
                     <span>Last event: <span className="text-slate-700 font-mono font-bold">{system.lastIncident}</span></span>
                   </div>
                 </div>
@@ -161,11 +190,11 @@ const SystemStatus: React.FC = () => {
                 <Clock size={20} className="text-indigo-600" />
                 <span>Active Incident History log</span>
               </h2>
-              <span className="text-[10px] font-black uppercase text-indigo-500 bg-indigo-50 border border-indigo-150 px-2 py-0.5 rounded">calibrated live</span>
+              <span className="text-[10px] font-black uppercase text-indigo-500 bg-indigo-50 border border-indigo-150 px-2 py-0.5 rounded">{incidents.length} events</span>
             </div>
             
             <div className="divide-y divide-gray-50">
-              {INCIDENTS_MOCK.map((incident) => (
+              {incidents.map((incident) => (
                 <div key={incident.id} className="p-6 hover:bg-gray-50/20 transition-colors">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-3">
                     <div className="flex items-center space-x-3">
@@ -188,7 +217,7 @@ const SystemStatus: React.FC = () => {
                   <div className="flex flex-wrap gap-4 text-[9px] font-mono font-bold text-gray-400 uppercase tracking-widest pt-2 border-t border-gray-100/50">
                     <span className="flex items-center"><Clock size={11} className="mr-1 text-slate-500" /> Init: {new Date(incident.startTime).toLocaleString()}</span>
                     {incident.endTime && <span className="flex items-center"><CheckCircle2 size={11} className="mr-1 text-emerald-500" /> Mitigated: {new Date(incident.endTime).toLocaleString()}</span>}
-                    <span className="flex items-center"><MessageSquare size={11} className="mr-1 text-slate-500" /> Operations dispatcher: {incident.team}</span>
+                    <span className="flex items-center"><MessageSquare size={11} className="mr-1 text-slate-500" /> Team: {incident.team}</span>
                   </div>
                 </div>
               ))}
@@ -281,7 +310,7 @@ const SystemStatus: React.FC = () => {
           {/* Quick FAQ info block */}
           <div className="bg-gray-50 border border-gray-100 p-6 rounded-3xl space-y-3">
             <h4 className="font-black text-gray-850 text-xs flex items-center gap-1 uppercase tracking-wider">
-              <InfoSquare size={13} className="text-indigo-600" /> Status Advisory Metrics
+              <Info size={13} className="text-indigo-600" /> Status Advisory Metrics
             </h4>
             <div className="text-[11px] leading-relaxed text-gray-500 space-y-2 font-medium">
               <p>
@@ -300,24 +329,5 @@ const SystemStatus: React.FC = () => {
     </div>
   );
 };
-
-// Simple InfoSquare mock icon to prevent compiling errors
-const InfoSquare: React.FC<{size?: number, className?: string}> = ({size = 18, className}) => (
-  <svg 
-    xmlns="http://www.w3.org/2000/svg" 
-    width={size} 
-    height={size} 
-    viewBox="0 0 24 24" 
-    fill="none" 
-    stroke="currentColor" 
-    strokeWidth="2" 
-    strokeLinecap="round" 
-    strokeLinejoin="round" 
-    className={className}
-  >
-    <rect width="18" height="18" x="3" y="3" rx="2" />
-    <path d="M12 8h.01M12 12v4" />
-  </svg>
-);
 
 export default SystemStatus;

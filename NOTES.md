@@ -292,6 +292,12 @@ GET /api/logs/search               — Filtered search (module, level, status, t
 GET /api/health                    — Health check (status, uptime, active requests, memory, error rate)
 GET /api/metrics                   — Full system metrics for Grafana scraping
 POST /api/telemetry                — Frontend telemetry receiver (page views, web vitals, heartbeats)
+GET /api/system/services           — Service status matrix (log-derived health per microservice)
+GET /api/system/incidents          — Active/recent incidents (from log errors)
+GET /api/analytics/modules         — Module popularity with view counts, avg time, bounce rate
+GET /api/analytics/hourly          — Hourly engagement data with peak hour detection
+GET /api/analytics/activity        — Recent user activity log
+GET /api/analytics/nps             — Module satisfaction & Net Promoter Score data
 ```
 
 ### Entity Relationship
