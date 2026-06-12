@@ -47,6 +47,8 @@ export interface SourceConnection {
   apiUrl?: string;
   apiKey?: string;
   apiPlatform?: string;
+  // File/Transfer fields (SFTP, Local)
+  basePath?: string;
 }
 
 export interface CardQueryBinding {
@@ -59,6 +61,7 @@ export interface CardQueryBinding {
 
 const isRdbms = (type: string) => ['postgresql', 'mysql', 'oracle', 'sqlserver', 'sqlite'].includes(type);
 const isApiBased = (type: string) => ['canvas', 'blackboard', 'moodle', 'banner', 'ellucian', 'custom-api'].includes(type);
+const isNetwork = (type: string) => isRdbms(type) || ['active-directory', 'smtp', 'sftp'].includes(type);
 
 const DEFAULT_SQL_BINDINGS: CardQueryBinding[] = [
   // ── Academics ──────────────────────────────────────────
@@ -619,6 +622,7 @@ const ConnectivityTest: React.FC = () => {
   const [apiUrl, setApiUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [apiPlatform, setApiPlatform] = useState('canvas');
+  const [basePath, setBasePath] = useState('');
 
   // Tester states
   const [activeTestingId, setActiveTestingId] = useState<string | null>(null);
@@ -657,6 +661,7 @@ const ConnectivityTest: React.FC = () => {
     setApiUrl('');
     setApiKey('');
     setApiPlatform('canvas');
+    setBasePath('');
     setIsFormOpen(true);
   };
 
@@ -676,6 +681,7 @@ const ConnectivityTest: React.FC = () => {
     setApiUrl(conn.apiUrl || '');
     setApiKey(conn.apiKey || '');
     setApiPlatform(conn.apiPlatform || 'canvas');
+    setBasePath(conn.basePath || '');
     setIsFormOpen(true);
   };
 
@@ -686,6 +692,8 @@ const ConnectivityTest: React.FC = () => {
     else if (type === 'sqlserver') setDbPort('1433');
     else if (type === 'sqlite') setDbPort('N/A');
     else if (type === 'active-directory') setDbPort('389');
+    else if (type === 'smtp') setDbPort('587');
+    else if (type === 'sftp') setDbPort('22');
     else if (type === 'canvas') setDbPort('443');
     else if (type === 'blackboard' || type === 'moodle' || type === 'banner' || type === 'ellucian') setDbPort('443');
     else if (type === 'custom-api') setDbPort('');
@@ -709,6 +717,12 @@ const ConnectivityTest: React.FC = () => {
       typeFields = { domain: domain, dbPort, dbUser, dbPass, baseDn, dbSslMode };
     } else if (isApiBased(dbType)) {
       typeFields = { apiUrl, apiKey, apiPlatform: dbType };
+    } else if (dbType === 'smtp') {
+      typeFields = { dbHost, dbPort, dbUser, dbPass, dbSslMode };
+    } else if (dbType === 'sftp') {
+      typeFields = { dbHost, dbPort, dbUser, dbPass, basePath };
+    } else if (dbType === 'local-files') {
+      typeFields = { basePath };
     } else {
       typeFields = {};
     }
@@ -801,6 +815,12 @@ const ConnectivityTest: React.FC = () => {
           Object.assign(payload, { dbType: conn.sourceType, dbHost: conn.dbHost, dbPort: conn.dbPort, dbName: conn.dbName, dbUser: conn.dbUser, dbPass: conn.dbPass, dbSslMode: conn.dbSslMode });
         } else if (conn.sourceType === 'active-directory') {
           Object.assign(payload, { dbType: conn.sourceType, dbHost: conn.domain, dbPort: conn.dbPort, dbUser: conn.dbUser, dbPass: conn.dbPass, dbSslMode: conn.dbSslMode, baseDn: conn.baseDn });
+        } else if (conn.sourceType === 'smtp') {
+          Object.assign(payload, { dbHost: conn.dbHost, dbPort: conn.dbPort, dbUser: conn.dbUser, dbPass: conn.dbPass, dbSslMode: conn.dbSslMode });
+        } else if (conn.sourceType === 'sftp') {
+          Object.assign(payload, { dbHost: conn.dbHost, dbPort: conn.dbPort, dbUser: conn.dbUser, dbPass: conn.dbPass, basePath: conn.basePath });
+        } else if (conn.sourceType === 'local-files') {
+          Object.assign(payload, { basePath: conn.basePath });
         } else if (isApiBased(conn.sourceType)) {
           Object.assign(payload, { apiUrl: conn.apiUrl, apiKey: conn.apiKey, apiPlatform: conn.sourceType });
         }
@@ -1028,11 +1048,17 @@ const ConnectivityTest: React.FC = () => {
                         conn.sourceType === 'mysql' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' :
                         conn.sourceType === 'sqlite' ? 'bg-amber-50 border-amber-100 text-amber-700' :
                         conn.sourceType === 'active-directory' ? 'bg-violet-50 border-violet-100 text-violet-700' :
+                        conn.sourceType === 'smtp' ? 'bg-orange-50 border-orange-100 text-orange-700' :
+                        conn.sourceType === 'sftp' ? 'bg-sky-50 border-sky-100 text-sky-700' :
+                        conn.sourceType === 'local-files' ? 'bg-stone-50 border-stone-100 text-stone-700' :
                         conn.sourceType === 'canvas' || conn.sourceType === 'blackboard' || conn.sourceType === 'moodle' ? 'bg-cyan-50 border-cyan-100 text-cyan-700' :
                         conn.sourceType === 'banner' || conn.sourceType === 'ellucian' ? 'bg-rose-50 border-rose-100 text-rose-700' :
                         'bg-purple-50 border-purple-100 text-purple-700'
                       }`}>
                         {conn.sourceType === 'active-directory' ? 'Active Directory' :
+                         conn.sourceType === 'smtp' ? 'SMTP' :
+                         conn.sourceType === 'sftp' ? 'SFTP' :
+                         conn.sourceType === 'local-files' ? 'Local Files' :
                          conn.sourceType === 'canvas' ? 'Canvas LMS' :
                          conn.sourceType === 'blackboard' ? 'Blackboard' :
                          conn.sourceType === 'moodle' ? 'Moodle' :
@@ -1046,6 +1072,9 @@ const ConnectivityTest: React.FC = () => {
                     <td className="py-4 px-4 font-mono font-bold text-gray-600">
                       {conn.sourceType === 'sqlite' ? 'local_drive_ref' :
                        conn.sourceType === 'active-directory' ? (conn.domain || conn.dbHost || 'N/A') :
+                       conn.sourceType === 'smtp' ? (conn.dbHost || 'N/A') :
+                       conn.sourceType === 'sftp' ? (conn.dbHost || 'N/A') :
+                       conn.sourceType === 'local-files' ? (conn.basePath || '(app root)') :
                        isApiBased(conn.sourceType) ? (conn.apiUrl || conn.dbHost || 'N/A') :
                        `${conn.dbHost}:${conn.dbPort}`}
                     </td>
@@ -1053,12 +1082,18 @@ const ConnectivityTest: React.FC = () => {
                     <td className="py-4 px-4 font-mono font-bold text-gray-700">
                       {conn.sourceType === 'active-directory' ? (conn.baseDn || 'N/A') :
                        conn.sourceType === 'sqlite' ? 'file://local' :
+                       conn.sourceType === 'smtp' ? `port ${conn.dbPort || '587'}` :
+                       conn.sourceType === 'sftp' ? (conn.basePath || '/') :
+                       conn.sourceType === 'local-files' ? 'file system' :
                        isApiBased(conn.sourceType) ? conn.apiPlatform || 'N/A' :
                        conn.dbName}
                     </td>
 
                     <td className="py-4 px-4 font-mono text-gray-500">
                       {conn.sourceType === 'active-directory' ? (conn.dbUser || conn.domain || 'N/A') :
+                       conn.sourceType === 'smtp' ? (conn.dbUser || 'N/A') :
+                       conn.sourceType === 'sftp' ? (conn.dbUser || 'N/A') :
+                       conn.sourceType === 'local-files' ? '—' :
                        isApiBased(conn.sourceType) ? (conn.apiKey ? '••••••••' : 'N/A') :
                        conn.dbUser || 'N/A'}
                     </td>
@@ -1410,6 +1445,13 @@ const ConnectivityTest: React.FC = () => {
                   <optgroup label="Directory Services">
                     <option value="active-directory">Active Directory (LDAP)</option>
                   </optgroup>
+                  <optgroup label="Messaging & Transfer">
+                    <option value="smtp">SMTP Email Server</option>
+                    <option value="sftp">SFTP Server</option>
+                  </optgroup>
+                  <optgroup label="Local Storage">
+                    <option value="local-files">Local File System</option>
+                  </optgroup>
                   <optgroup label="Learning Management Systems">
                     <option value="canvas">Canvas LMS</option>
                     <option value="blackboard">Blackboard Learn</option>
@@ -1665,6 +1707,100 @@ const ConnectivityTest: React.FC = () => {
                       >
                         {showPassword ? 'Hide' : 'Reveal'}
                       </button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* SMTP fields */}
+              {dbType === 'smtp' && (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">SMTP Server Host</label>
+                      <div className="relative">
+                        <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 select-none"><Wifi size={13} /></span>
+                        <input type="text" required value={dbHost} onChange={(e) => setDbHost(e.target.value)} placeholder="e.g. smtp.benedict.edu" className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl pl-8 pr-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 transition-colors" />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">Port</label>
+                      <input type="text" required value={dbPort} onChange={(e) => setDbPort(e.target.value)} placeholder="587" className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 transition-colors" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">Username</label>
+                      <input type="text" required value={dbUser} onChange={(e) => setDbUser(e.target.value)} placeholder="e.g. noreply@benedict.edu" className="w-full text-xs font-semibold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 transition-colors" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <label className="text-xs font-bold text-gray-750 block">Password</label>
+                        <button type="button" onClick={() => setShowPassword(!showPassword)} className="text-[10px] text-indigo-600 font-extrabold uppercase hover:underline">{showPassword ? 'Hide' : 'Reveal'}</button>
+                      </div>
+                      <input type={showPassword ? 'text' : 'password'} required value={dbPass} onChange={(e) => setDbPass(e.target.value)} placeholder="••••••••" className="w-full text-xs bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 transition-colors" />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-750 block">Encryption</label>
+                    <select value={dbSslMode} onChange={(e) => setDbSslMode(e.target.value)} className="w-full text-xs font-semibold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-indigo-600 transition-colors">
+                      <option value="require">TLS (STARTTLS / SMTPS)</option>
+                      <option value="disable">No Encryption</option>
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {/* SFTP fields */}
+              {dbType === 'sftp' && (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="md:col-span-2 space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">SFTP Server Host</label>
+                      <div className="relative">
+                        <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 select-none"><Wifi size={13} /></span>
+                        <input type="text" required value={dbHost} onChange={(e) => setDbHost(e.target.value)} placeholder="e.g. sftp.benedict.edu" className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl pl-8 pr-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 transition-colors" />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">Port</label>
+                      <input type="text" required value={dbPort} onChange={(e) => setDbPort(e.target.value)} placeholder="22" className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 transition-colors" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-750 block">Username</label>
+                      <input type="text" required value={dbUser} onChange={(e) => setDbUser(e.target.value)} placeholder="e.g. sftp-user" className="w-full text-xs font-semibold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 transition-colors" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <label className="text-xs font-bold text-gray-750 block">Password / SSH Key</label>
+                        <button type="button" onClick={() => setShowPassword(!showPassword)} className="text-[10px] text-indigo-600 font-extrabold uppercase hover:underline">{showPassword ? 'Hide' : 'Reveal'}</button>
+                      </div>
+                      <input type={showPassword ? 'text' : 'password'} required value={dbPass} onChange={(e) => setDbPass(e.target.value)} placeholder="••••••••" className="w-full text-xs bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 transition-colors" />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-750 block">Base Directory Path</label>
+                    <input type="text" value={basePath} onChange={(e) => setBasePath(e.target.value)} placeholder="e.g. /incoming/reports (leave empty for home)" className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 transition-colors" />
+                  </div>
+                </>
+              )}
+
+              {/* Local File System fields */}
+              {dbType === 'local-files' && (
+                <>
+                  <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl flex items-start gap-2.5 text-xs text-amber-900">
+                    <Info size={15} className="text-amber-600 shrink-0 mt-0.5" />
+                    <p>Choose a local directory on the server. The connector will list files and folders within that path. Leave empty to use the application root.</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-750 block">Local Directory Path</label>
+                    <div className="relative">
+                      <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 select-none">
+                        <Database size={13} />
+                      </span>
+                      <input type="text" value={basePath} onChange={(e) => setBasePath(e.target.value)} placeholder='e.g. C:\Data\Reports or /mnt/shared' className="w-full text-xs font-mono font-bold bg-gray-50 border border-gray-200 text-slate-800 rounded-xl pl-8 pr-3 py-2.5 outline-none focus:ring-1 focus:ring-slate-900 transition-colors" />
                     </div>
                   </div>
                 </>

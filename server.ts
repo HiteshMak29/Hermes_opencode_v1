@@ -365,7 +365,7 @@ async function startServer() {
 
   // Real database connection test endpoint
   app.post("/api/test-connection", async (req, res) => {
-    const { sourceType, dbType, dbHost, dbPort, dbName, dbUser, dbPass, dbSslMode, domain, baseDn, apiUrl, apiKey, apiPlatform } = req.body;
+    const { sourceType, dbType, dbHost, dbPort, dbName, dbUser, dbPass, dbSslMode, domain, baseDn, basePath, apiUrl, apiKey, apiPlatform } = req.body;
     const actualType = sourceType || dbType;
 
     if (!actualType) {
@@ -461,6 +461,51 @@ async function startServer() {
         }
       } catch (error: any) {
         return res.json({ success: false, error: `API request failed: ${error.message}`, latency: Date.now() - startTime });
+      }
+    } else if (actualType === "smtp") {
+      try {
+        const nodemailer = await import('nodemailer');
+        const transporter = nodemailer.createTransport({
+          host: dbHost,
+          port: parseInt(dbPort) || 587,
+          secure: dbSslMode === 'require' ? (parseInt(dbPort) === 465) : false,
+          auth: { user: dbUser, pass: dbPass },
+          tls: dbSslMode === 'require' ? { rejectUnauthorized: false } : undefined,
+          connectionTimeout: 5000,
+        });
+        await transporter.verify();
+        return res.json({ success: true, latency: Date.now() - startTime });
+      } catch (error: any) {
+        return res.json({ success: false, error: `SMTP connection failed: ${error.message}`, latency: Date.now() - startTime });
+      }
+    } else if (actualType === "sftp") {
+      try {
+        const SftpClient = (await import('ssh2-sftp-client'));
+        const client = new SftpClient();
+        await client.connect({
+          host: dbHost,
+          port: parseInt(dbPort) || 22,
+          username: dbUser,
+          password: dbPass,
+          readyTimeout: 10000,
+        });
+        const targetPath = basePath || '/';
+        await client.list(targetPath);
+        await client.end();
+        return res.json({ success: true, latency: Date.now() - startTime });
+      } catch (error: any) {
+        return res.json({ success: false, error: `SFTP connection failed: ${error.message}`, latency: Date.now() - startTime });
+      }
+    } else if (actualType === "local-files") {
+      try {
+        const fs = await import('fs/promises');
+        const targetPath = basePath || '.';
+        await fs.access(targetPath);
+        const stat = await fs.stat(targetPath);
+        if (!stat.isDirectory()) throw new Error('Path is not a directory');
+        return res.json({ success: true, latency: Date.now() - startTime });
+      } catch (error: any) {
+        return res.json({ success: false, error: `Local file system access failed: ${error.message}`, latency: Date.now() - startTime });
       }
     } else {
       return res.status(400).json({ success: false, error: `Unsupported source type: '${actualType}'` });
