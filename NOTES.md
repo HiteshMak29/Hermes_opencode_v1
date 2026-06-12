@@ -423,7 +423,17 @@ Point Grafana's JSON API data source to:
 2. Set each binding's `connectionId` to the new connection instead of `sis-production`
 3. Cards will then pull data from the live database
 
-## Remaining Work
-- Views other than Academics and Finances still use hardcoded/empty constants
+## Session — Jun 12 — System Status & Module Analytics
+
+Enabled SystemStatus and ModuleAnalytics views to render real log-derived data instead of empty mock constants.
+
+### What was done
+- Added 6 new REST endpoints (`/api/system/services`, `/api/system/incidents`, `/api/analytics/modules`, `/api/analytics/hourly`, `/api/analytics/activity`, `/api/analytics/nps`) in `server.ts`
+- Rewrote `SystemStatus.tsx` to fetch from `/api/system/services` and `/api/system/incidents` — removed dependency on `SYSTEM_STATUS_MOCK` / `INCIDENTS_MOCK`
+- Rewrote `ModuleAnalytics.tsx` to fetch from all four `/api/analytics/*` endpoints — removed dependency on `MODULE_USAGE_MOCK` / `HOURLY_ENGAGEMENT_MOCK` / `RECENT_ACTIVITY_MOCK`
+- Data is synthesized from `logger.ts` (page views, module access, hourly breakdown) and `monitor.ts` (latency percentiles, error rate). Fallback seeded values ensure charts render even with zero traffic.
+
+### Remaining Work
+- Views other than Academics, Finances, SystemStatus, and ModuleAnalytics still use hardcoded/empty constants
 - Each view needs `execute-card-query` integration (read bindings, resolve connection, fetch data)
 - Currently only Academics and Finances have full SQL-driven data flow
