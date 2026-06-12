@@ -57,6 +57,9 @@ export interface CardQueryBinding {
   sqlQuery: string;
 }
 
+const isRdbms = (type: string) => ['postgresql', 'mysql', 'oracle', 'sqlserver', 'sqlite'].includes(type);
+const isApiBased = (type: string) => ['canvas', 'blackboard', 'moodle', 'banner', 'ellucian', 'custom-api'].includes(type);
+
 const DEFAULT_SQL_BINDINGS: CardQueryBinding[] = [
   // ── Academics ──────────────────────────────────────────
   {
@@ -543,7 +546,13 @@ const ConnectivityTest: React.FC = () => {
       try {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed)) {
-          return parsed;
+          // Migrate old format: dbType → sourceType
+          return parsed.map((c: any) => {
+            if (!c.sourceType && c.dbType) {
+              return { ...c, sourceType: c.dbType };
+            }
+            return c;
+          });
         }
       } catch (e) {
         // Fallback
@@ -669,9 +678,6 @@ const ConnectivityTest: React.FC = () => {
     setApiPlatform(conn.apiPlatform || 'canvas');
     setIsFormOpen(true);
   };
-
-  const isRdbms = (type: string) => ['postgresql', 'mysql', 'oracle', 'sqlserver', 'sqlite'].includes(type);
-  const isApiBased = (type: string) => ['canvas', 'blackboard', 'moodle', 'banner', 'ellucian', 'custom-api'].includes(type);
 
   const handleDbTypeChange = (type: string) => {
     setDbType(type);
