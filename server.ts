@@ -1,9 +1,8 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import pg from "pg";
-import mssql from "mssql";
 import path from "path";
 import { fileURLToPath } from "url";
+import { testConnection, executeQuery } from "./services/gateway.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -197,7 +196,7 @@ async function startServer() {
     return res.json({ columns, rows, execTimeMs: Math.floor(Math.random() * 20) + 5 });
   });
 
-  // Live Active Card SQL Executor Bridge (real DB connections)
+  // Live Active Card SQL Executor Bridge (real DB connections via gateway)
   app.post("/api/sis/staging/execute-card-query", async (req, res) => {
     const { connection, sqlQuery } = req.body;
     if (!sqlQuery) {
@@ -274,242 +273,15 @@ async function startServer() {
       });
     }
 
-    const { dbType, dbHost, dbPort, dbName, dbUser, dbPass, dbSslMode } = connection;
-    
-    let processedQuery = sqlQuery;
-    processedQuery = processedQuery.replace(/@StudentId/gi, "'1028617'");
-    processedQuery = processedQuery.replace(/:student_id/gi, "'1028617'");
-
-    if (dbType === "sqlserver" || dbType === "mssql") {
-      try {
-        const config = {
-          user: dbUser,
-          password: dbPass,
-          server: dbHost,
-          port: parseInt(dbPort) || 1433,
-          database: dbName,
-          options: {
-            encrypt: dbSslMode === "require" || dbSslMode === "prefer",
-            trustServerCertificate: true
-          },
-          connectionTimeout: 4000,
-          requestTimeout: 8000
-        };
-
-        const pool = await mssql.connect(config);
-        const result = await pool.request().query(processedQuery);
-        await pool.close();
-
-        return res.json({
-          success: true,
-          rows: result.recordset,
-          columns: result.recordset && result.recordset.length > 0 ? Object.keys(result.recordset[0]) : []
-        });
-      } catch (error: any) {
-        console.warn("MSSQL connection/query failed:", error.message);
-        return res.status(200).json({
-          success: false,
-          error: error.message || "Failed to query MSSQL Server backend",
-          code: error.code || "DB_ERROR"
-        });
-      }
-    } else if (dbType === "postgresql" || dbType === "postgres") {
-      try {
-        const poolConfig: pg.PoolConfig = {
-          user: dbUser,
-          host: dbHost,
-          database: dbName,
-          password: dbPass,
-          port: parseInt(dbPort) || 5432,
-          connectionTimeoutMillis: 4000
-        };
-
-        if (dbSslMode === "require" || dbSslMode === "prefer") {
-          poolConfig.ssl = { rejectUnauthorized: false };
-        }
-
-        const client = new pg.Client(poolConfig);
-        await client.connect();
-        const result = await client.query({ text: processedQuery, rowMode: 'array' as any });
-        await client.end();
-
-        const cols = result.fields.map(f => f.name);
-        const rows = result.rows.map(row => {
-          const obj: any = {};
-          cols.forEach((colName, index) => {
-            obj[colName] = (row as any)[index];
-          });
-          return obj;
-        });
-
-        return res.json({
-          success: true,
-          rows,
-          columns: cols
-        });
-      } catch (error: any) {
-        console.warn("PostgreSQL connection/query failed:", error.message);
-        return res.status(200).json({
-          success: false,
-          error: error.message || "Failed to query PostgreSQL backend",
-          code: error.code || "DB_ERROR"
-        });
-      }
-    }
-
-    return res.status(400).json({
-      success: false,
-      error: `Database platform '${dbType}' is not currently configured for executing card telemetry.`
-    });
+    // Route to the appropriate microservice via gateway
+    const result = await executeQuery(connection, sqlQuery);
+    return res.json(result);
   });
 
-  // Real database connection test endpoint
+  // Connection test endpoint — routes to the appropriate microservice via gateway
   app.post("/api/test-connection", async (req, res) => {
-    const { sourceType, dbType, dbHost, dbPort, dbName, dbUser, dbPass, dbSslMode, domain, baseDn, basePath, apiUrl, apiKey, apiPlatform } = req.body;
-    const actualType = sourceType || dbType;
-
-    if (!actualType) {
-      return res.status(400).json({ success: false, error: "Missing source type" });
-    }
-
-    const startTime = Date.now();
-
-    if (actualType === "sqlserver" || actualType === "mssql") {
-      try {
-        const config = {
-          user: dbUser,
-          password: dbPass,
-          server: dbHost,
-          port: parseInt(dbPort) || 1433,
-          database: dbName || 'master',
-          options: {
-            encrypt: dbSslMode === "require" || dbSslMode === "prefer",
-            trustServerCertificate: true
-          },
-          connectionTimeout: 5000,
-          requestTimeout: 5000
-        };
-        const pool = await mssql.connect(config);
-        await pool.request().query('SELECT 1');
-        await pool.close();
-        return res.json({ success: true, latency: Date.now() - startTime });
-      } catch (error: any) {
-        return res.json({ success: false, error: error.message, latency: Date.now() - startTime });
-      }
-    } else if (actualType === "postgresql" || actualType === "postgres") {
-      try {
-        const poolConfig: pg.PoolConfig = {
-          user: dbUser,
-          host: dbHost,
-          database: dbName || 'postgres',
-          password: dbPass,
-          port: parseInt(dbPort) || 5432,
-          connectionTimeoutMillis: 5000
-        };
-        if (dbSslMode === "require" || dbSslMode === "prefer") {
-          poolConfig.ssl = { rejectUnauthorized: false };
-        }
-        const client = new pg.Client(poolConfig);
-        await client.connect();
-        await client.query('SELECT 1');
-        await client.end();
-        return res.json({ success: true, latency: Date.now() - startTime });
-      } catch (error: any) {
-        return res.json({ success: false, error: error.message, latency: Date.now() - startTime });
-      }
-    } else if (actualType === "active-directory") {
-      // LDAP bind test — requires ldapjs package
-      let ldap: any;
-      try {
-        ldap = await import('ldapjs');
-        const client = ldap.createClient({
-          url: `ldap${dbSslMode === 'require' || dbSslMode === 'prefer' ? 's' : ''}://${domain || dbHost}:${parseInt(dbPort) || 389}`,
-          timeout: 5000,
-          connectTimeout: 5000,
-          tlsOptions: dbSslMode === 'require' || dbSslMode === 'prefer' ? { rejectUnauthorized: false } : undefined,
-        });
-        await new Promise<void>((resolve, reject) => {
-          client.bind(dbUser, dbPass, (err: any) => {
-            client.unbind();
-            if (err) reject(new Error(err.message || 'LDAP bind failed'));
-            else resolve();
-          });
-        });
-        return res.json({ success: true, latency: Date.now() - startTime });
-      } catch (error: any) {
-        return res.json({ success: false, error: `LDAP connection failed: ${error.message}`, latency: Date.now() - startTime });
-      }
-    } else if (['canvas', 'blackboard', 'moodle', 'banner', 'ellucian', 'custom-api'].includes(actualType)) {
-      // API-based sources: attempt an HTTP GET to the provided URL
-      try {
-        if (!apiUrl) throw new Error('API URL is required');
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
-        const response = await fetch(apiUrl, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${apiKey || ''}`,
-            'Content-Type': 'application/json',
-          },
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
-        if (response.ok || response.status < 500) {
-          return res.json({ success: true, latency: Date.now() - startTime, statusCode: response.status });
-        } else {
-          return res.json({ success: false, error: `API returned status ${response.status}`, latency: Date.now() - startTime });
-        }
-      } catch (error: any) {
-        return res.json({ success: false, error: `API request failed: ${error.message}`, latency: Date.now() - startTime });
-      }
-    } else if (actualType === "smtp") {
-      try {
-        const nodemailer = await import('nodemailer');
-        const transporter = nodemailer.createTransport({
-          host: dbHost,
-          port: parseInt(dbPort) || 587,
-          secure: dbSslMode === 'require' ? (parseInt(dbPort) === 465) : false,
-          auth: { user: dbUser, pass: dbPass },
-          tls: dbSslMode === 'require' ? { rejectUnauthorized: false } : undefined,
-          connectionTimeout: 5000,
-        });
-        await transporter.verify();
-        return res.json({ success: true, latency: Date.now() - startTime });
-      } catch (error: any) {
-        return res.json({ success: false, error: `SMTP connection failed: ${error.message}`, latency: Date.now() - startTime });
-      }
-    } else if (actualType === "sftp") {
-      try {
-        const SftpClient = (await import('ssh2-sftp-client'));
-        const client = new SftpClient();
-        await client.connect({
-          host: dbHost,
-          port: parseInt(dbPort) || 22,
-          username: dbUser,
-          password: dbPass,
-          readyTimeout: 10000,
-        });
-        const targetPath = basePath || '/';
-        await client.list(targetPath);
-        await client.end();
-        return res.json({ success: true, latency: Date.now() - startTime });
-      } catch (error: any) {
-        return res.json({ success: false, error: `SFTP connection failed: ${error.message}`, latency: Date.now() - startTime });
-      }
-    } else if (actualType === "local-files") {
-      try {
-        const fs = await import('fs/promises');
-        const targetPath = basePath || '.';
-        await fs.access(targetPath);
-        const stat = await fs.stat(targetPath);
-        if (!stat.isDirectory()) throw new Error('Path is not a directory');
-        return res.json({ success: true, latency: Date.now() - startTime });
-      } catch (error: any) {
-        return res.json({ success: false, error: `Local file system access failed: ${error.message}`, latency: Date.now() - startTime });
-      }
-    } else {
-      return res.status(400).json({ success: false, error: `Unsupported source type: '${actualType}'` });
-    }
+    const result = await testConnection(req.body);
+    return res.json(result);
   });
 
   // --- VITE MIDDLEWARE ---
