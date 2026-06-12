@@ -1,6 +1,6 @@
 
-import React from 'react';
-import { HashRouter, Routes, Route } from 'react-router-dom';
+import React, { useEffect, useRef } from 'react';
+import { HashRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { CollegeBrandingProvider } from './brandingConfig';
 import Layout from './components/Layout';
 import Dashboard from './views/Dashboard';
@@ -26,11 +26,33 @@ import DegreeProgress from './views/DegreeProgress';
 import WellnessHub from './views/WellnessHub';
 import CampusMap from './views/CampusMap';
 import UserDirectory from './views/UserDirectory';
+import { trackPageView, startHeartbeat, observeWebVitals } from './views/telemetry';
+
+const TelemetryTracker: React.FC = () => {
+  const location = useLocation();
+  const tracked = useRef<string>('');
+
+  useEffect(() => {
+    startHeartbeat();
+    observeWebVitals();
+  }, []);
+
+  useEffect(() => {
+    const page = location.pathname === '/' ? 'dashboard' : location.pathname.replace('/', '');
+    if (page !== tracked.current) {
+      tracked.current = page;
+      trackPageView(page);
+    }
+  }, [location]);
+
+  return null;
+};
 
 const App: React.FC = () => {
   return (
     <CollegeBrandingProvider>
       <HashRouter>
+        <TelemetryTracker />
         <Layout>
           <Routes>
             <Route path="/" element={<Dashboard />} />

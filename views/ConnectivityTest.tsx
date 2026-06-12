@@ -24,6 +24,7 @@ import {
   Info
 } from 'lucide-react';
 import { useCollegeBranding } from '../brandingConfig';
+import { trackTransaction, trackModuleAccess } from './telemetry';
 
 export interface SourceConnection {
   id: string;
@@ -832,6 +833,8 @@ const ConnectivityTest: React.FC = () => {
         const data = await res.json();
 
         if (data.success) {
+          trackTransaction(`connectivity:${conn.sourceType}`, data.latency || 0, { success: true, metadata: { connId: conn.id, sourceType: conn.sourceType } });
+          trackModuleAccess('connectivity', 'test-success', data.latency || 0);
           setDbTestSteps(prev => [
             prev[0],
             prev[1],
@@ -850,6 +853,8 @@ const ConnectivityTest: React.FC = () => {
             lastTested: new Date().toLocaleTimeString()
           } : c));
         } else {
+          trackTransaction(`connectivity:${conn.sourceType}`, 0, { success: false, metadata: { connId: conn.id, sourceType: conn.sourceType, error: data.error } });
+          trackModuleAccess('connectivity', 'test-failure');
           setDbTestSteps(prev => [
             prev[0],
             prev[1],

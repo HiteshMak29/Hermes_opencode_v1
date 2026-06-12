@@ -2,8 +2,10 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
+import crypto from "crypto";
 import { testConnection, executeQuery } from "./services/gateway.ts";
 import { logger } from "./services/logger.ts";
+import { monitor } from "./services/monitor.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,31 +16,76 @@ async function startServer() {
 
   app.use(express.json());
 
-  // ── Request logging middleware ──
+  // ── Correlation ID & Request Monitoring Middleware ──
   app.use((req, res, next) => {
+    const correlationId = (req.headers['x-correlation-id'] as string) || crypto.randomUUID();
+    req.headers['x-correlation-id'] = correlationId;
+    res.setHeader('X-Correlation-Id', correlationId);
+
     const start = Date.now();
+    monitor.beginRequest();
+
+    // capture request body size
+    const contentLength = parseInt(req.headers['content-length'] || '0');
+
+    // intercept res.json to compute response body size and log
     const originalJson = res.json.bind(res);
     res.json = function (body: any) {
       const dur = Date.now() - start;
+      const payload = JSON.stringify(body);
+      const payloadBytes = Buffer.byteLength(payload, 'utf-8');
+
+      monitor.endRequest({
+        path: req.path,
+        method: req.method,
+        duration: dur,
+        statusCode: res.statusCode,
+        payloadBytes,
+      });
+      monitor.trackIp(req.ip || 'unknown');
+
       const status = res.statusCode < 400 ? 'success' : 'failure';
-      logger.info('http', `${req.method} ${req.path}`, `${req.method} ${req.path} → ${res.statusCode} in ${dur}ms`, {
+      logger.info('http', `${req.method} ${req.path}`, `${req.method} ${req.path} → ${res.statusCode} in ${dur}ms (${payloadBytes}b)`, {
         status,
         duration: dur,
+        correlationId,
+        payloadBytes,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
         metadata: {
           method: req.method,
           path: req.path,
           statusCode: res.statusCode,
           query: req.query,
+          requestBodyBytes: contentLength,
+          responseBodyBytes: payloadBytes,
         },
-        ip: req.ip,
-        userAgent: req.headers['user-agent'],
       });
       return originalJson(body);
     };
     next();
   });
 
-  // ── Log API endpoints (for Grafana / native dashboard) ──
+  // ── Health check ──
+  app.get("/api/health", (req, res) => {
+    const metrics = monitor.getMetrics();
+    res.json({
+      success: true,
+      status: metrics.healthy ? 'healthy' : 'degraded',
+      timestamp: new Date().toISOString(),
+      uptime: metrics.uptime,
+      uptimeDays: Math.round(metrics.uptimeDays * 100) / 100,
+      activeRequests: metrics.activeRequests,
+      activeConnections: metrics.activeConnections,
+      requestRate1m: metrics.requestRate1m,
+      requestRate5m: metrics.requestRate5m,
+      errorRate: metrics.errorRate,
+      memory: metrics.memory,
+      responseTime: metrics.responseTimeHistogram,
+    });
+  });
+
+  // ── Log API endpoints ──
 
   app.get("/api/logs/recent", (req, res) => {
     const limit = parseInt(req.query.limit as string) || 200;
@@ -48,11 +95,25 @@ async function startServer() {
 
   app.get("/api/logs/stats", (req, res) => {
     const stats = logger.stats();
-    res.json({ success: true, ...stats });
+    const sys = monitor.getMetrics();
+    res.json({
+      success: true,
+      ...stats,
+      system: {
+        activeRequests: sys.activeRequests,
+        activeConnections: sys.activeConnections,
+        requestRate1m: sys.requestRate1m,
+        requestRate5m: sys.requestRate5m,
+        errorRate: sys.errorRate,
+        memory: sys.memory,
+        topSlowEndpoints: sys.topSlowEndpoints,
+        topModules: sys.topModules,
+      },
+    });
   });
 
   app.get("/api/logs/search", (req, res) => {
-    const { modules, levels, status, from, to, limit } = req.query as Record<string, string>;
+    const { modules, levels, status, from, to, limit, correlationId } = req.query as Record<string, string>;
     const entries = logger.search({
       modules: modules ? modules.split(',') : undefined,
       levels: levels ? levels.split(',') as any : undefined,
@@ -60,8 +121,47 @@ async function startServer() {
       from,
       to,
       limit: limit ? parseInt(limit) : undefined,
+      correlationId,
     });
     res.json({ success: true, count: entries.length, entries });
+  });
+
+  // ── Frontend Telemetry Endpoint ──
+  app.post("/api/telemetry", (req, res) => {
+    const { type, module, action, duration, metadata } = req.body;
+    const correlationId = req.headers['x-correlation-id'] as string;
+
+    switch (type) {
+      case 'page-view':
+        logger.logPageView(module || 'unknown', req.ip || '', correlationId, duration || 0, { ip: req.ip });
+        break;
+      case 'module-access':
+        logger.log('info', 'module-access', action || 'access', `Module access: ${module}`, {
+          status: 'success', duration, correlationId, ip: req.ip, metadata: { module, ...metadata },
+        });
+        break;
+      case 'performance':
+        logger.logPerformance(module || 'unknown', action || 'metric', duration || 0, { metadata });
+        break;
+      case 'transaction':
+        logger.logTransaction(action || 'unknown', 'success', duration || 0, { correlationId, metadata, payloadBytes: metadata?.payloadBytes });
+        break;
+      case 'error':
+        logger.error('frontend', action || 'error', 'Frontend error', {
+          correlationId, metadata, error: { message: (metadata?.errorMessage as string) || 'Unknown' },
+        });
+        break;
+      default:
+        logger.info('frontend', type || 'event', action || 'Unknown event', { correlationId, metadata });
+    }
+
+    res.json({ success: true });
+  });
+
+  // ── System Metrics (for Grafana) ──
+  app.get("/api/metrics", (req, res) => {
+    const metrics = monitor.getMetrics();
+    res.json({ success: true, ...metrics });
   });
 
   // ── SIS Staging API Routes ──
@@ -69,7 +169,7 @@ async function startServer() {
   app.get("/api/sis/staging/profile/:id", async (req, res) => {
     const { id } = req.params;
     try {
-      logger.info('sis', 'profile-fetch', `Profile fetch for student ${id}`);
+      logger.info('sis', 'profile-fetch', `Profile fetch for student ${id}`, { correlationId: req.headers['x-correlation-id'] as string });
       res.json({
         success: true,
         source: "SIS_Staging_Database",
@@ -87,7 +187,7 @@ async function startServer() {
         }
       });
     } catch (error) {
-      logger.error('sis', 'profile-fetch', `Profile fetch failed for ${id}`, { error: { message: (error as Error).message } });
+      logger.error('sis', 'profile-fetch', `Profile fetch failed for ${id}`, { error: { message: (error as Error).message }, correlationId: req.headers['x-correlation-id'] as string });
       res.status(500).json({ success: false, error: "Database query failed for profile card" });
     }
   });
@@ -95,7 +195,7 @@ async function startServer() {
   app.get("/api/sis/staging/finances/:id", async (req, res) => {
     const { id } = req.params;
     try {
-      logger.info('sis', 'finances-fetch', `Finances fetch for student ${id}`);
+      logger.info('sis', 'finances-fetch', `Finances fetch for student ${id}`, { correlationId: req.headers['x-correlation-id'] as string });
       res.json({
         success: true,
         source: "SIS_Staging_Database",
@@ -114,7 +214,7 @@ async function startServer() {
         }
       });
     } catch (error) {
-      logger.error('sis', 'finances-fetch', `Finances fetch failed for ${id}`, { error: { message: (error as Error).message } });
+      logger.error('sis', 'finances-fetch', `Finances fetch failed for ${id}`, { error: { message: (error as Error).message }, correlationId: req.headers['x-correlation-id'] as string });
       res.status(500).json({ success: false, error: "Database query failed for finance card" });
     }
   });
@@ -122,7 +222,7 @@ async function startServer() {
   app.get("/api/sis/staging/courses/:id", async (req, res) => {
     const { id } = req.params;
     try {
-      logger.info('sis', 'courses-fetch', `Courses fetch for student ${id}, term ${req.query.term}`);
+      logger.info('sis', 'courses-fetch', `Courses fetch for student ${id}`, { correlationId: req.headers['x-correlation-id'] as string });
       res.json({
         success: true,
         source: "SIS_Staging_Database",
@@ -134,7 +234,7 @@ async function startServer() {
         ]
       });
     } catch (error) {
-      logger.error('sis', 'courses-fetch', `Courses fetch failed for ${id}`, { error: { message: (error as Error).message } });
+      logger.error('sis', 'courses-fetch', `Courses fetch failed for ${id}`, { error: { message: (error as Error).message }, correlationId: req.headers['x-correlation-id'] as string });
       res.status(500).json({ success: false, error: "Database query failed for course roster card" });
     }
   });
@@ -142,7 +242,7 @@ async function startServer() {
   app.get("/api/sis/staging/medical/:id", async (req, res) => {
     const { id } = req.params;
     try {
-      logger.info('sis', 'medical-fetch', `Medical fetch for student ${id}`);
+      logger.info('sis', 'medical-fetch', `Medical fetch for student ${id}`, { correlationId: req.headers['x-correlation-id'] as string });
       res.json({
         success: true,
         source: "SIS_Staging_Database",
@@ -155,7 +255,7 @@ async function startServer() {
         ]
       });
     } catch (error) {
-      logger.error('sis', 'medical-fetch', `Medical fetch failed for ${id}`, { error: { message: (error as Error).message } });
+      logger.error('sis', 'medical-fetch', `Medical fetch failed for ${id}`, { error: { message: (error as Error).message }, correlationId: req.headers['x-correlation-id'] as string });
       res.status(500).json({ success: false, error: "Database query failed for health compliance card" });
     }
   });
@@ -164,11 +264,12 @@ async function startServer() {
   app.post("/api/sis/staging/execute-sql", async (req, res) => {
     const { query } = req.body;
     if (!query) {
-      logger.warn('sandbox', 'execute-sql', 'Missing query parameter');
+      logger.warn('sandbox', 'execute-sql', 'Missing query parameter', { correlationId: req.headers['x-correlation-id'] as string });
       return res.status(400).json({ error: "Query statement is required" });
     }
 
     const startTime = Date.now();
+    const correlationId = req.headers['x-correlation-id'] as string;
 
     const selectMatch = query.match(/SELECT\s+(.*?)\s+FROM\s/is);
     const rawColumns = selectMatch ? selectMatch[1].trim() : query;
@@ -233,19 +334,20 @@ async function startServer() {
 
     const dur = Date.now() - startTime;
     logger.info('sandbox', 'execute-sql', `SQL sandbox executed in ${dur}ms`, {
-      status: 'success',
-      duration: dur,
+      status: 'success', duration: dur, correlationId,
       metadata: { columns, rowCount },
     });
 
     return res.json({ columns, rows, execTimeMs: dur });
   });
 
-  // Live Active Card SQL Executor Bridge (real DB connections via gateway)
+  // Live Active Card SQL Executor Bridge
   app.post("/api/sis/staging/execute-card-query", async (req, res) => {
     const { connection, sqlQuery } = req.body;
+    const correlationId = req.headers['x-correlation-id'] as string;
+
     if (!sqlQuery) {
-      logger.warn('database', 'execute-card-query', 'Missing SQL query parameter');
+      logger.warn('database', 'execute-card-query', 'Missing SQL query parameter', { correlationId });
       return res.status(400).json({ success: false, error: "SQL query statement is required." });
     }
 
@@ -314,8 +416,7 @@ async function startServer() {
 
       const dur = Date.now() - startTime;
       logger.info('database', 'execute-card-query', `Simulated query executed in ${dur}ms`, {
-        status: 'success',
-        duration: dur,
+        status: 'success', duration: dur, correlationId,
         metadata: { simulated: true, rowCount: rows.length, columns },
       });
 
@@ -326,7 +427,7 @@ async function startServer() {
     return res.json(result);
   });
 
-  // Connection test endpoint — routes to the appropriate microservice via gateway
+  // Connection test endpoint
   app.post("/api/test-connection", async (req, res) => {
     const result = await testConnection(req.body);
     return res.json(result);

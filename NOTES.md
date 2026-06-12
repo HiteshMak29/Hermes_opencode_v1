@@ -236,8 +236,13 @@ The system has a comprehensive structured logging framework designed for Grafana
 
 ```
 services/
-  logger.ts       — Core logger: rotating JSONL files + in-memory ring buffer (2000 entries)
+  logger.ts       — Core logger: rotating JSONL files + in-memory ring buffer (5000 entries)
+  monitor.ts      — System monitor: active requests, memory, percentiles, endpoints, throughput
+views/
+  telemetry.ts    — Frontend telemetry: page views, web vitals (LCP/CLS/FID), heartbeat, transactions
 ```
+
+### Log Schema (Grafana-compatible JSON)
 
 ### Log Schema (Grafana-compatible JSON)
 
@@ -268,51 +273,136 @@ Each log entry is written as a JSON line to `logs/app-YYYY-MM-DD.log`:
 | **Connectivity** | All test-connection attempts (per source type), latency, success/failure | `connectivity` |
 | **Database Queries** | Every execute-card-query, SQL preview, row count, latency, errors | `database` |
 | **Microservice Routing** | Gateway dispatch decisions, service resolution | `gateway` |
-| **HTTP API** | Every request: method, path, status code, duration, client IP | `http` |
+| **HTTP API** | Every request: method, path, status code, duration, IP, payload bytes, correlation ID | `http` |
 | **SIS Data** | Profile, finances, courses, medical fetches | `sis` |
 | **SQL Sandbox** | Ad-hoc SQL execution, column counts | `sandbox` |
-| **System Events** | Server start, gateway init | `system` |
-| **Auth Events** | Login, logout, session events (via `logAuthEvent`) | `auth` |
-| **Module Access** | Per-user per-session module access tracking (via `logModuleAccess`) | `module-access` |
+| **System Events** | Server start, gateway init, health status | `system` |
+| **Auth Events** | Login, logout, session events | `auth` |
+| **Module Access** | Per-user per-session module access tracking | `module-access` |
+| **Frontend** | Page views, navigation timing, web vitals (LCP/CLS/FID) | `frontend` |
+| **Transactions** | End-to-end transaction tracing with correlation IDs | `transaction` |
+| **Performance** | Response time percentiles, slow endpoint tracking | `performance` |
 
 ### API Endpoints (for Grafana / dashboard consumption)
 
 ```
 GET /api/logs/recent?limit=200     — Last N log entries from memory buffer
-GET /api/logs/stats                — Aggregated stats: counts by level/module/status,
-                                     failure rate, avg latency, throughput/min, top errors
-GET /api/logs/search?modules=...   — Filtered search with query params:
-  &levels=info,warn,error            modules (comma-separated)
-  &status=failure                    levels (comma-separated)
-  &from=2026-06-12T00:00:00Z        status filter
-  &to=2026-06-12T23:59:59Z          time range
-  &limit=100                         max results
+GET /api/logs/stats                — Aggregated stats + system metrics
+GET /api/logs/search               — Filtered search (module, level, status, time range, correlationId)
+GET /api/health                    — Health check (status, uptime, active requests, memory, error rate)
+GET /api/metrics                   — Full system metrics for Grafana scraping
+POST /api/telemetry                — Frontend telemetry receiver (page views, web vitals, heartbeats)
 ```
 
-### Stats Response Shape
+### Entity Relationship
+
+```
+Frontend (telemetry.ts) ──POST /api/telemetry──→ Logger + Monitor
+Browser DevTools       ──GET  /api/logs/*──────→ Logger
+Grafana                ──GET  /api/health       → Monitor
+Grafana                ──GET  /api/metrics      → Monitor
+Promtail               ──tail logs/app-*.log    → Loki → Grafana
+```
+
+### Stats Response Shape (enhanced)
 
 ```json
 {
-  "total": 1500,
-  "byLevel": { "info": 1200, "warn": 200, "error": 100 },
-  "byModule": { "connectivity": 300, "database": 500, "http": 600, ... },
-  "byStatus": { "success": 1300, "failure": 200 },
-  "failureRate": 13.33,
+  "total": 5000,
+  "byLevel": { "info": 4200, "warn": 500, "error": 300 },
+  "byModule": { "connectivity": 300, "database": 500, "http": 2000, "frontend": 1500, ... },
+  "byStatus": { "success": 4500, "failure": 500 },
+  "byAction": { "connectivity:test-connection": 200, "http:GET /api/health": 800, ... },
+  "failureRate": 10.0,
+  "successRate": 90.0,
   "avgDuration": 42,
+  "p50Duration": 15,
+  "p95Duration": 180,
+  "p99Duration": 950,
+  "dataThroughput": 1048576,
   "topErrors": [
     { "module": "connectivity", "action": "test-connection", "count": 45 }
   ],
+  "topSlowActions": [
+    { "module": "database", "action": "execute-query", "avgDuration": 1200, "count": 50 }
+  ],
   "throughput": [
     { "timestamp": "04:20", "count": 15 },
-    { "timestamp": "04:21", "count": 22 }
-  ]
+    ...
+  ],
+  "hourlyBreakdown": [
+    { "hour": "00:00", "count": 120, "errors": 5 },
+    ...
+  ],
+  "moduleAccessCount": [
+    { "module": "academics", "count": 320 },
+    ...
+  ],
+  "pageViews": [
+    { "page": "dashboard", "count": 500, "avgDuration": 1200 },
+    ...
+  ],
+  "system": {
+    "activeRequests": 3,
+    "activeConnections": 1,
+    "requestRate1m": 12,
+    "requestRate5m": 10,
+    "errorRate": 2.5,
+    "memory": { "heapUsed": 85673456, "heapTotal": 134217728, "rss": 145000000, "external": 4200000 },
+    "topSlowEndpoints": [
+      { "method": "POST", "path": "/api/test-connection", "count": 50, "avgDuration": 350, "maxDuration": 5200 }
+    ],
+    "topModules": [
+      { "module": "api", "count": 800 }
+    ]
+  }
 }
 ```
+
+### Health Endpoint Response
+
+```
+GET /api/health
+```
+
+```json
+{
+  "success": true,
+  "status": "healthy",
+  "timestamp": "2026-06-12T04:30:00.000Z",
+  "uptime": 3600000,
+  "uptimeDays": 0.04,
+  "activeRequests": 2,
+  "activeConnections": 1,
+  "requestRate1m": 15,
+  "requestRate5m": 12,
+  "errorRate": 0.5,
+  "memory": { "heapUsed": 85000000, "heapTotal": 130000000, "rss": 144000000, "external": 4000000 },
+  "responseTime": { "label": "response time", "count": 500, "p50": 12, "p95": 150, "p99": 800 }
+}
+```
+
+### Frontend Telemetry (automatic)
+
+The `telemetry.ts` module in `views/` automatically sends:
+
+| Event | When | Data |
+|---|---|---|
+| `page-view` | Every route change | Page name, navigation timing, viewport |
+| `web-vitals` | LCP, FID observed | Largest Contentful Paint, First Input Delay |
+| `web-vitals` | On page unload | Cumulative Layout Shift (CLS) |
+| `heartbeat` | Every 60s | Session duration, JS heap memory |
+| `transaction` | On connectivity test | Source type, latency, success/failure |
+| `module-access` | On connectivity test | Module name, action |
+
+### Correlation ID Tracing
+
+Every HTTP request gets a `X-Correlation-Id` header. This ID flows through backend logs, frontend telemetry, and response headers. Search by `correlationId` to trace a full request lifecycle.
 
 ### Log File Rotation
 
 - Written to `logs/app-YYYY-MM-DD.log` (one file per day)
-- In-memory ring buffer holds last 2000 entries for fast API queries
+- In-memory ring buffer holds last 5000 entries for fast API queries
 - No external dependencies — uses built-in `fs.appendFile`
 
 ### To Integrate with Grafana
